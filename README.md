@@ -1,3 +1,6 @@
+# Customed_RT_DETR
+This project is customed version of RT_DETR
+
 ## TODO
 <details>
 <summary> see details </summary>
@@ -109,3 +112,6 @@ python tools/export_onnx.py -c configs/rtdetr/rtdetr_r18vd_6x_coco.yml -r path/t
 
 2. add `-t path/to/checkpoint` (optinal) to tuning rtdetr based on pretrained checkpoint. see [training script details](./tools/README.md).
 </details>
+
+
+
