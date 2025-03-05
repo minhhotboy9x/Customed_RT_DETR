@@ -1,0 +1,53 @@
+RTDETRPostProcessor
+    box from xywh to xyxy
+    postprocessor wrong in RTDETRPostProcessor (rtdetr_postprocessor)
+        rtdetr_r18vd_6x_coco: 0.464 mAP before fix eval and postprocess
+        rtdetr_r18vd_6x_coco: 0.455 mAP before fix eval and after fix postprocess
+        rtdetr_r18vd_6x_coco: 0.438 mAP before fix eval and after add conf threshold=0.25 postprocess
+
+
+eval pipeline:
+    DetSolver.val() -> evaluate (det_engine) -> CocoEvaluator
+
+COCOeval
+    def computeIoU(selfm imgId, catId)
+
+CocoEvaluator
+    from pycocotools.cocoeval import COCOeval
+    from pycocotools.coco import COCO
+
+    self.coco_gt: COCO object 
+    self.iou_types: (bbox, )
+    self.coco_eval['bbox']: COCOeval object
+
+    def convert_to_xywh(boxes):
+        convert xyxy to xywh
+
+    def update(self, predictions)
+        predictions: a list with len = batch, each element is dict(['labels', 'boxes', 'scores'])
+
+        coco_dt = COCO.loadRes(self.coco_gt, results): COCO object
+
+    def prepare_for_coco_detection(self, predictions)
+        format the prediction:
+            [
+                {
+                    "image_id": original_id,
+                    "category_id": labels[k],
+                    "bbox": box,
+                    "score": scores[k],
+                }
+                for k, box in enumerate(boxes)
+            ]
+
+    def evaluate(self):
+        p = self.params
+        p.catIds: id của các categories
+        p.imgIds: id của các images
+        computeIoU(imgId, catId): 
+            tính iou của các detect có class thuộc catId với
+            gt có class thuộc catId (wrong here)
+        self.ious = {
+            (imgId, catId): computeIoU(imgId, catId)
+            for imgId in p.imgIds
+            for catId in catIds}

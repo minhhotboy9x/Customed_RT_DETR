@@ -1,0 +1,94 @@
+example of config rtdetr_r18vd_6x_coco
+
+RTDETRTransformer (rtdetr_decoder.py) (training mode)
+    self.hidden_dim = 256
+    self.nhead = 8
+    self.feat_strides = [8, 16, 32]
+    self.num_levels = 3 (3 scales in backbone??)
+    self.num_classes = 80
+    self.num_queries = 300
+    self.eps = 0.01
+    self.num_decoder_layers = 3
+    self.eval_spatial_size = [640, 640] 
+        different from [512, 512] of input image
+
+    self.aux_loss = True
+    self.input_proj = ModuleList(
+        (0-2): 3 x Sequential(
+            (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True))
+        ) # project from hidden_dim -> hidden_dim?? (redundant)
+    
+    self.decoder: TransformerDecoder(x3 TransformerDecoderLayer)
+
+    self.num_denoising: 100 (100 query for denoising box)
+    self.label_noise_ratio: 0.5
+    self.box_noise_scale: 1.0
+    self.denoising_class_embed: 
+        nn.Embedding(num_classes+1, hidden_dim, padding_idx=num_classes)
+        Embedding(81, 256, padding_idx=80)
+    
+    # decoder embedding
+    self.learnt_init_query = False
+    self.query_pos_head: MLP(
+        (layers): ModuleList(
+            (0): Linear(in_features=4, out_features=512, bias=True)
+            (1): Linear(in_features=512, out_features=256, bias=True))
+        (act): ReLU(inplace=True))
+    
+
+    # encoder head
+    self.enc_output: Sequential(
+        (0): Linear(in_features=256, out_features=256, bias=True)
+        (1): LayerNorm((256,), eps=1e-05, elementwise_affine=True))
+    self.enc_score_head: Linear(in_features=256, out_features=80, bias=True)
+    self.enc_bbox_head: MLP(
+            (layers): ModuleList(
+                (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+                (2): Linear(in_features=256, out_features=4, bias=True)
+            )
+            (act): ReLU(inplace=True))
+    
+    # decoder head
+    self.dec_score_head = ModuleList(
+        (0-2): 3 x Linear(in_features=256, out_features=80, bias=True))
+    self.dec_bbox_head = ModuleList(
+        (0-2): 3 x MLP(
+            (layers): ModuleList(
+                (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+                (2): Linear(in_features=256, out_features=4, bias=True))
+            (act): ReLU(inplace=True))
+        )
+
+
+    - _generate_anchors(self,
+                          spatial_shapes=None,
+                          grid_size=0.05,
+                          dtype=torch.float32,
+                          device='cpu')
+        # the image are fed in a dynamic size,
+        # but the self.eval_spatial_size are fixed size (640, 640)
+        # grid_size=0.05 maybe the chosen size for each grid
+        spatial_shapes = [[80, 80], [40, 40], [20, 20]]
+
+        ...
+
+        anchors = torch.concat(anchors, 1).to(device) # [1, 8400, 4]
+        valid_mask = ((anchors > self.eps) * (anchors < 1 - self.eps)).all(-1, keepdim=True) # [1, 8400, 4]
+        anchors = torch.log(anchors / (1 - anchors)) # inverse sigmoid
+        anchors = torch.where(valid_mask, anchors, torch.inf)
+            get the anchor point and its w, h
+        return anchors, valid_mask
+    
+    - _get_encoder_input(self, feats):
+        # get projection features
+        proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
+
+        feat_flatten: shape [b, sum(w*h)]
+        level_start_index: [w1*h1, w2*h2 + w1*h1, w3*h3 + w2*h2 + w1*h1, ...]
+        spatial_shapes [[w1, h1], [w2, h2], ...]
+        return (feat_flatten, spatial_shapes, level_start_index)
+
+
+
+

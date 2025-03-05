@@ -1,0 +1,20 @@
+__include__: [
+  '../dataset/coco_detection.yml',
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetr_r50vd.yml',
+]
+
+output_dir: ./output/rtdetr_r50vd_m_6x_coco
+
+postprocessor: CustomedPostProcessor2
+
+CustomedPostProcessor2:
+  num_top_queries: 300
+  
+HybridEncoder:
+  expansion: 0.5
+
+RTDETRTransformer:
+  eval_idx: 2 # use 3th decoder layer to eval

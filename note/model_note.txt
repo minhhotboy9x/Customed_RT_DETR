@@ -1,0 +1,57 @@
+Example for rtdetr_r18vs_6x
+
+The model (RTDETR in rtdetr.py) contain 3 part:
+    backbone (resnet)
+        + backbone output a list (len=3): multi scale feats, 
+            each element is feat from a scale
+    encoder (fusion of few blocks like neck in PAN) (HybridEncoder)
+    decoder (RTDETRTransformer)
+    -> on train: img is randomly scaled for wider size ranges
+
+
+HybridEncoder (hybrid_encoder.py)
+    get 3 feats from 3 scale
+    self.in_channels: [128, 256, 512]
+    self.feat_strides" [8, 16, 32]
+    self.input_proj: x3 conv2d to scale inp channel to self.hidden_dim
+    self.pe_temperature : 10000
+    self.encoder: TransformerEncoder
+
+    self.num_encoder_layers: usually 1
+    self.use_encoder_idx: [2] index of feat which used in self.encoder 
+        (usually for lowest resolution)
+        ( for i, enc_ind in enumerate(self.use_encoder_idx):
+                h, w = proj_feats[enc_ind].shape[2:] )
+    
+    self.eval_spatial_size [640, 640] shape of input image
+
+    self.out_channels: [256, 256, 256]
+    self.out_strides: [8, 16, 32]
+    
+    (ori_imag.shape // stride == feat.shape)
+
+    Neck:
+        self.lateral_convs = nn.ModuleList()
+        self.fpn_blocks = nn.ModuleList()
+
+    - forward(self, feat) (noticeble)
+        proj_feats: a list of each scale with shape of
+            each element is (b, self.hidden_dim, w, h) 
+
+        if self.num_encoder_layers > 0:
+            for i, enc_ind in enumerate(self.use_encoder_idx):
+                ....
+            
+            -> run attention for the last proj_feats
+        
+        inner_outs = [proj_feats[-1]]
+        for idx in range(len(self.in_channels) - 1, 0, -1):
+            ... 
+        
+        outs = [inner_outs[0]]
+        for idx in range(len(self.in_channels) - 1):
+            ...
+
+        return outs: len = 3, each has shape (b, self.hidden_dim=256, h, w)
+
+

@@ -1,0 +1,132 @@
+- get_contrastive_denoising_training_group(targets,
+                                             num_classes,
+                                             num_queries,
+                                             class_embed,
+                                             num_denoising=100,
+                                             label_noise_ratio=0.5,
+                                             box_noise_scale=1.0,):
+    targets: gt box and label from dataloader
+    num_classes: 80
+    num_queries: 300
+    num_denoising: 100
+    label_noise_ratio: 0.5
+    box_noise_scale: 1.0
+
+    num_gts: list of num gt in each image
+    max_gt_num = max(num_gts)
+
+    num_group = num_denoising // max_gt_num
+    num_group = 1 if num_group == 0 else num_group
+    
+    # pad gt to max_num of a batch
+    bs = len(num_gts)
+    input_query_class:  [bs, max_gt_num]
+    input_query_bbox: [bs, max_gt_num, 4], 0 is no box
+    pad_gt_mask: [bs, max_gt_num], 1 is has gt, 0 is no
+
+    # each group has positive and negative queries.
+    # 2 * num_group for pos and neg box noising
+    #
+    input_query_class = input_query_class.tile([1, 2 * num_group])
+        # [bs, max_gt_num * 2 * num_group], 
+        # = num_classes if no GT else true cls
+    input_query_bbox = input_query_bbox.tile([1, 2 * num_group, 1])
+        # [bs, max_gt_num * 2 * num_group, 4]
+
+    pad_gt_mask = pad_gt_mask.tile([1, 2 * num_group])
+        # [bs, max_gt_num * 2 * num_group]
+            ( input_query_class[i, :num_gt] = targets[i]['labels']
+            input_query_bbox[i, :num_gt] = targets[i]['boxes']
+            pad_gt_mask[i, :num_gt] = 1 )
+    
+    # positive and negative mask
+    negative_gt_mask # [bs, max_gt_num * 2 * num_group, 1]
+        element at max_gt_num*2k is 1 (negative box)
+    
+    positive_gt_mask # [bs, max_gt_num * 2 * num_group]
+    
+    dn_positive_idx: torch.nonzero(positive_gt_mask)[:, 1]
+        list of pos idx, len = bs
+        
+    num_denoising = int(max_gt_num * 2 * num_group)
+        # total denoising queries
+
+    if label_noise_ratio > 0:
+        input_query_class: randomly change some cls to another class_embed 
+    
+    if box_noise_scale > 0:
+        known_bbox = box_cxcywh_to_xyxy(input_query_bbox)
+        diff = torch.tile(input_query_bbox[..., 2:] * 0.5, [1, 1, 2]) * box_noise_scale
+            # [bs, max_gt_num * 2 * num_group, 4]
+            # last dim is for (wh, wh)
+            # => create noise query boxes in size of wh
+        rand_sign = torch.randint_like(input_query_bbox, 0, 2) * 2.0 - 1.0
+            # [bs, max_gt_num * 2 * num_group, 4]
+            # value in {-1, 1}
+        
+        rand_part = torch.rand_like(input_query_bbox)
+            # create noise in range [0, 1]
+        rand_part = (rand_part + 1.0) * negative_gt_mask + rand_part * (1 - negative_gt_mask)
+            # negative_gt_mask = 1 stronger noise 
+            # negative_gt_mask = 0 keep original noise 
+        rand_part *= rand_sign
+            # get sign of noise
+            # [bs, max_gt_num * 2 * num_group, 4]
+        
+        known_bbox += rand_part * diff
+        known_bbox.clip_(min=0.0, max=1.0)
+            # add noise at diff level to bbox 
+            # [bs, max_gt_num * 2 * num_group, 4]
+        
+        input_query_bbox = box_xyxy_to_cxcywh(known_bbox)
+        input_query_bbox = inverse_sigmoid(input_query_bbox)
+            # assign noised bbox back to input_query_bbox
+            # convert to inverse_sigmoid
+            # [bs, max_gt_num * 2 * num_group, 4]
+        
+    input_query_class = class_embed(input_query_class)
+        # [bs, max_gt_num * 2 * num_group, hidden_dim=256]
+    
+    tgt_size = num_denoising + num_queries
+        # 180+300
+    attn_mask = torch.full([tgt_size, tgt_size], False, dtype=torch.bool, device=device)
+        # [tgt_size, tgt_size]
+        # Denoising queries from 0 to num_denoising - 1
+        # Object queries from num_denoising to tgt_size - 1
+    attn_mask[num_denoising:, :num_denoising] = True
+        # True means corresponding position is not allowed to attend.
+        # exmaple 
+        False  False  False  False  False  # Denoising query 0
+        False  False  False  False  False  # Denoising query 1
+        True   True   False  False  False  # Object query 0
+        True   True   False  False  False  # Object query 1
+        True   True   False  False  False  # Object query 2
+    
+    for i in range(num_group):
+        if i == 0:
+            attn_mask[max_gt_num * 2 * i: max_gt_num * 2 * (i + 1), max_gt_num * 2 * (i + 1): num_denoising] = True
+            # Queries in first group (i=0) 
+            # cant see group from (i+1 to num_group-1)    
+
+        if i == num_group - 1:
+            attn_mask[max_gt_num * 2 * i: max_gt_num * 2 * (i + 1), :max_gt_num * i * 2] = True
+            # Queries in last group (num_group-1) 
+            # cant see group from (0 to i-1)  
+
+        else:
+            attn_mask[max_gt_num * 2 * i: max_gt_num * 2 * (i + 1), max_gt_num * 2 * (i + 1): num_denoising] = True
+            attn_mask[max_gt_num * 2 * i: max_gt_num * 2 * (i + 1), :max_gt_num * 2 * i] = True
+            # Queries in group (i) 
+            # cant see group from (0 to i-1 and i+1 to num_group-1) 
+
+    dn_meta = {
+        "dn_positive_idx": dn_positive_idx,
+        "dn_num_group": num_group,
+        "dn_num_split": [num_denoising, num_queries]
+    }
+
+    return input_query_class, input_query_bbox, attn_mask, dn_meta
+        
+
+
+

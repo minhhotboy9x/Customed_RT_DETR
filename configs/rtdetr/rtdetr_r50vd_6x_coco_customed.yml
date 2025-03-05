@@ -1,0 +1,17 @@
+__include__: [
+  '../dataset/coco_detection.yml',
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetr_r50vd.yml',
+]
+
+val_dataloader:
+  batch_size: 4
+
+postprocessor: CustomedPostProcessor2
+
+CustomedPostProcessor2:
+  num_top_queries: 300
+
+output_dir: ./output/rtdetr_r50vd_6x_coco
