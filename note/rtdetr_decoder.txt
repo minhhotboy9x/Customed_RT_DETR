@@ -1,0 +1,115 @@
+TransformerDecoder(nn.Module):
+    - __init__(self, hidden_dim, decoder_layer, num_layers, eval_idx=-1):
+        self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) 
+            for _ in range(num_layers)])
+            # xN TransformerDecoderLayer
+        self.hidden_dim = hidden_dim
+
+        self.num_layers = num_layers
+
+        self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
+            # usually last layer
+    
+    - forward(self,
+                tgt, 
+                    # [b, int(max_gt_num * 2 * num_group) + num_queries, hidden_dim]
+                    # embedding of class
+                    # detached
+                ref_points_unact, 
+                    # [b, int(max_gt_num * 2 * num_group) + num_queries, 4]
+                    # detached
+                memory,
+                    # memory after applying valid_mask
+                    # [b, sum(w*h), hidden_dim] 
+                memory_spatial_shapes,
+                    # [[w1, h1], [w2, h2], [w3, h3]]
+                memory_level_start_index,
+                    # [w1*h1, w2*h2 + w1*h1, w3*h3 + w2*h2 + w1*h1, ...]
+                bbox_head,
+                    # x num_decoder_layers MLP
+                score_head,
+                    # x num_decoder_layers Linear
+                query_pos_head,
+                    # MLP(4, 2 * hidden_dim, hidden_dim, num_layers=2)
+                attn_mask=None,
+                    # [int(max_gt_num * 2 * num_group) + num_queries, 
+                        int(max_gt_num * 2 * num_group) + num_queries]
+                memory_mask=None):
+        output = tgt 
+            # [b, int(max_gt_num * 2 * num_group) + num_queries, hidden_dim]
+            # detach
+        dec_out_bboxes = []
+        dec_out_logits = []
+        ref_points_detach = F.sigmoid(ref_points_unact)
+            # [b, int(max_gt_num * 2 * num_group) + num_queries, 4]
+            # apply activation for bbox
+            # this is like the anchor, queries just aligned from this
+            # detached
+        
+        for i, layer in enumerate(self.layers):
+            ref_points_input = ref_points_detach.unsqueeze(2)
+                # [b, int(max_gt_num * 2 * num_group) + num_queries, 1, 4]
+
+            query_pos_embed = query_pos_head(ref_points_detach)
+                # [b, int(max_gt_num * 2 * num_group) + num_queries, hidden_dim]
+                # queries for position embbeding
+
+            # output like q and k,
+                query_pos_embed like position embbeding,
+                they are of true queries and dn queries
+            
+            output = layer(output, ref_points_input, memory,
+                           memory_spatial_shapes, memory_level_start_index,
+                           attn_mask, memory_mask, query_pos_embed)
+
+            inter_ref_bbox = F.sigmoid(bbox_head[i](output) + inverse_sigmoid(ref_points_detach))
+                # [b, int(max_gt_num * 2 * num_group) + num_queries, 4]
+
+            if self.training:
+                dec_out_logits.append(score_head[i](output)) 
+                    # list([b, int(max_gt_num * 2 * num_group) + num_queries, num_class])
+                if i == 0:
+                    dec_out_bboxes.append(inter_ref_bbox)
+                else:
+                    dec_out_bboxes.append(F.sigmoid(bbox_head[i](output) + inverse_sigmoid(ref_points)))
+                    # list([b, int(max_gt_num * 2 * num_group) + num_queries, 4])
+
+            elif i == self.eval_idx:
+                dec_out_logits.append(score_head[i](output))
+                dec_out_bboxes.append(inter_ref_bbox)
+                break
+
+            # in training: get all output from all decoder
+            # in eval: get only from last decoder
+
+            ref_points = inter_ref_bbox # for ref_points above
+            ref_points_detach = inter_ref_bbox.detach() 
+                if self.training 
+                else inter_ref_bbox
+                
+        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits)
+
+        ## gradient design in decoder:
+            the feats from encoder: 
+                memory, memory_spatial_shapes, memory_level_start_index
+                gradient is attached to every decoder layer
+            
+            output, ref_points_input, ref_points_detach, query_pos_embed detached from encoeder
+                only output not detached between decoder layers
+            
+            for classification: only get from output
+
+            for bbox prediction:
+                0th layer: 
+                    inter_ref_bbox = act(f1(output), f2(ref_points_detach))
+                    dec_out_bbox = inter_ref_bbox # out b0
+
+                
+                ith layer
+                    inter_ref_bbox = act(f1(output), f2(ref_points_detach))
+                        # box queries + detached box from last layer
+                    dec_out_bbox = act(f1(output), f2(ref_points))
+                        # box queries + attached box from last layer
+                
+                ref_points = inter_ref_bbox # attached gradient to ith layer
+                ref_points_detach = inter_ref_bbox.detach() # detached gradient

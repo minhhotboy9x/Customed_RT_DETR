@@ -139,11 +139,11 @@ if __name__ == '__main__':
     solver = CustomedDetSolver(cfg)
     solver.train()
 
-    for batch in solver.train_dataloader:
-        input = batch[0].to(solver.device)
-        targets = [{k: v.to(solver.device) for k, v in t.items()} for t in batch[1]]
-        break    
-    out = solver.model(input, targets)
+    # for batch in solver.train_dataloader:
+    #     input = batch[0].to(solver.device)
+    #     targets = [{k: v.to(solver.device) for k, v in t.items()} for t in batch[1]]
+    #     break    
+    # out = solver.model(input, targets)
 
     if args.test_only:
         solver.val_with_query()

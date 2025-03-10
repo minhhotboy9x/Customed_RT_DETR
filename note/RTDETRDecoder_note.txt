@@ -73,22 +73,145 @@ RTDETRTransformer (rtdetr_decoder.py) (training mode)
 
         ...
 
-        anchors = torch.concat(anchors, 1).to(device) # [1, 8400, 4]
-        valid_mask = ((anchors > self.eps) * (anchors < 1 - self.eps)).all(-1, keepdim=True) # [1, 8400, 4]
+        anchors = torch.concat(anchors, 1).to(device) # [1, sum(w*h), 4]
+        valid_mask = ((anchors > self.eps) * (anchors < 1 - self.eps)).all(-1, keepdim=True) #[1, sum(w*h), 1]
         anchors = torch.log(anchors / (1 - anchors)) # inverse sigmoid
         anchors = torch.where(valid_mask, anchors, torch.inf)
             get the anchor point and its w, h
-        return anchors, valid_mask
+        return anchors # [1, sum(w*h), 4], valid_mask # [1, sum(w*h), 1]
     
     - _get_encoder_input(self, feats):
         # get projection features
         proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
 
-        feat_flatten: shape [b, sum(w*h)]
+        feat_flatten: shape [b, sum(w*h), hidden_dim]
         level_start_index: [w1*h1, w2*h2 + w1*h1, w3*h3 + w2*h2 + w1*h1, ...]
         spatial_shapes [[w1, h1], [w2, h2], ...]
         return (feat_flatten, spatial_shapes, level_start_index)
 
+    - get_contrastive_denoising_training_group(targets,
+                                             num_classes,
+                                             num_queries,
+                                             class_embed,
+                                             num_denoising=100,
+                                             label_noise_ratio=0.5,
+                                             box_noise_scale=1.0,)
+
+        return input_query_class, # [bs, max_gt_num * 2 * num_group, hidden_dim=256]
+                input_query_bbox # inverse_sigmoid, 
+                attn_mask, 
+                    # [int(max_gt_num * 2 * num_group) + num_queries, 
+                    int(max_gt_num * 2 * num_group) + num_queries]
+                dn_meta # dict()
+
+    - _get_decoder_input(self,
+                        memory # feat_flatten: shape [b, sum(w*h), hidden_dim],
+                        spatial_shapes # [[w1, h1], [w2, h2], ...],
+                        denoising_class=None 
+                            # [bs, max_gt_num * 2 * num_group, hidden_dim=256]
+                            # class embbeding,
+                        denoising_bbox_unact=None
+                            # [bs, max_gt_num * 2 * num_group, 4]
+                            # inverse_sigmoid of cxcywh):
+        bs # batch_size
+        if self.training or self.eval_spatial_size is None:
+            anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
+        else:
+            anchors, valid_mask = self.anchors.to(memory.device), self.valid_mask.to(memory.device)
+        anchors # [1, sum(w*h), 4]
+        valid_mask # [1, sum(w*h), 1]
+        memory = valid_mask.to(memory.dtype) * memory # [b, sum(w*h), hidden_dim]
+
+        output_memory = self.enc_output(memory) 
+            # feats before convert into box and class queries
+            # [b, sum(w*h), hidden_dim]
+
+        enc_outputs_class = self.enc_score_head(output_memory) 
+            # [b, sum(w*h), num_class=80]
+        enc_outputs_coord_unact = self.enc_bbox_head(output_memory) + anchors 
+            # [b, sum(w*h), 4]
+        
+        _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, self.num_queries, dim=1)
+            # queries selection, index of selected queries
+            # [b, 300]
+        
+        reference_points_unact = enc_outputs_coord_unact.gather(dim=1, \
+            index=topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1]))
+            # reference points unactivation: topk 300 boxes
+            # [b, 300, 4]
+        
+        enc_topk_bboxes = F.sigmoid(reference_points_unact)
+            # [b, 300, 4]
+            # limit box into range [0, 1]
+        
+        if denoising_bbox_unact is not None:
+            reference_points_unact = torch.concat(
+                [denoising_bbox_unact, reference_points_unact], 1)
+            # concat the denoising box queries with the selected box queries 
+            # [b, max_gt_num * 2 * num_group + num_queries, 4]
+        
+        enc_topk_logits = enc_outputs_class.gather(dim=1, \
+            index=topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_class.shape[-1]))
+            # top k logit: topk 300 classes
+            # [b, 300, num_class=80]
+        
+        if self.learnt_init_query: # False
+            target = self.tgt_embed.weight.unsqueeze(0).tile([bs, 1, 1])
+        else:
+            target = output_memory.gather(dim=1, \
+                index=topk_ind.unsqueeze(-1).repeat(1, 1, output_memory.shape[-1]))
+            target = target.detach()
+                # selected from output_memory
+                # torch.Size([b, 300, hidden_dim])
+        
+        if denoising_class is not None:
+            target = torch.concat([denoising_class, target], 1)
+                # [b, max_gt_num * 2 * num_group + num_queries, hidden_dim] 
+        
+        return target, reference_points_unact.detach(), enc_topk_bboxes, enc_topk_logits
 
 
+    - forward(self, feats, targets=None):
+        (memory, spatial_shapes, level_start_index) = self._get_encoder_input(feats)
+            # [b, sum(w*h), hidden_dim]
+            # [[w1, h1], [w2, h2], [w3, h3]]
+            # [w1*h1, w2*h2 + w1*h1, w3*h3 + w2*h2 + w1*h1, ...]
 
+        # prepare denoising training
+        if self.training and self.num_denoising > 0:
+            denoising_class, denoising_bbox_unact, attn_mask, dn_meta = \
+                get_contrastive_denoising_training_group(targets, \
+                    self.num_classes, 
+                    self.num_queries, 
+                    self.denoising_class_embed, 
+                    num_denoising=self.num_denoising, 
+                    label_noise_ratio=self.label_noise_ratio, 
+                    box_noise_scale=self.box_noise_scale, )
+                # [b, max_gt_num * 2 * num_group + num_queries, hidden_dim] 
+                # [b, max_gt_num * 2 * num_group + num_queries, 4]
+                # [int(max_gt_num * 2 * num_group) + num_queries, 
+                    int(max_gt_num * 2 * num_group) + num_queries]
+                # dict("dn_positive_idx", "dn_num_group", "dn_num_split")
+        else:
+            denoising_class, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
+
+        target, init_ref_points_unact, enc_topk_bboxes, enc_topk_logits = \
+            self._get_decoder_input(memory, spatial_shapes, denoising_class, denoising_bbox_unact)
+            # [b, max_gt_num * 2 * num_group + num_queries, hidden_dim]
+            # [b, max_gt_num * 2 * num_group + num_queries, 4]
+            # [b, 300, 4]
+            # [b, 300, num_class=80]
+        
+        # target is denoising class + class embbeding selected from enc feats
+        # init_ref_points_unact is denoising bbox + 
+
+        out_bboxes, out_logits = self.decoder(
+            target,
+            init_ref_points_unact,
+            memory,
+            spatial_shapes,
+            level_start_index,
+            self.dec_bbox_head,
+            self.dec_score_head,
+            self.query_pos_head,
+            attn_mask=attn_mask)
