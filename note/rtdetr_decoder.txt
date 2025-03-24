@@ -88,6 +88,8 @@ TransformerDecoder(nn.Module):
                 else inter_ref_bbox
                 
         return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits)
+        # torch.Size([len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, 4])
+        # torch.Size([len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, num_classes])
 
         ## gradient design in decoder:
             the feats from encoder: 
@@ -113,3 +115,63 @@ TransformerDecoder(nn.Module):
                 
                 ref_points = inter_ref_bbox # attached gradient to ith layer
                 ref_points_detach = inter_ref_bbox.detach() # detached gradient
+
+
+
+class TransformerDecoderLayer(nn.Module):
+    def __init__(self,
+                 d_model=256,
+                 n_head=8,
+                 dim_feedforward=1024,
+                 dropout=0.,
+                 activation="relu",
+                 n_levels=4,
+                 n_points=4,):
+        super(TransformerDecoderLayer, self).__init__()
+
+        # self attention
+        self.self_attn = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
+        ...
+
+        # cross attention
+        self.cross_attn = MSDeformableAttention(d_model, n_head, n_levels, n_points)
+        ...
+    
+    def forward(self,
+                tgt,
+                reference_points,
+                memory,
+                memory_spatial_shapes,
+                memory_level_start_index,
+                attn_mask=None,
+                memory_mask=None,
+                query_pos_embed=None):
+        # self attention
+        q = k = self.with_pos_embed(tgt, query_pos_embed)
+
+        # if attn_mask is not None:
+        #     attn_mask = torch.where(
+        #         attn_mask.to(torch.bool),
+        #         torch.zeros_like(attn_mask),
+        #         torch.full_like(attn_mask, float('-inf'), dtype=tgt.dtype))
+
+        tgt2, _ = self.self_attn(q, k, value=tgt, attn_mask=attn_mask)
+        tgt = tgt + self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
+
+        # cross attention
+        tgt2 = self.cross_attn(\
+            self.with_pos_embed(tgt, query_pos_embed), 
+            reference_points, 
+            memory, 
+            memory_spatial_shapes, 
+            memory_mask)
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+
+        # ffn
+        tgt2 = self.forward_ffn(tgt)
+        tgt = tgt + self.dropout4(tgt2)
+        tgt = self.norm3(tgt)
+
+        return tgt

@@ -214,4 +214,15 @@ RTDETRTransformer (rtdetr_decoder.py) (training mode)
             self.dec_bbox_head,
             self.dec_score_head,
             self.query_pos_head,
-            attn_mask=attn_mask)
+            attn_mask=attn_mask
+            )
+            # [len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, 4]
+            # [len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, num_classes]
+        
+        if self.training and dn_meta is not None:
+            dn_out_bboxes, out_bboxes = torch.split(out_bboxes, dn_meta['dn_num_split'], dim=2)
+            # [len(self.num_layers), b, int(max_gt_num * 2 * num_group), 4]
+            # [len(self.num_layers), b, num_queries, 4]
+            dn_out_logits, out_logits = torch.split(out_logits, dn_meta['dn_num_split'], dim=2)
+            # [len(self.num_layers), b, int(max_gt_num * 2 * num_group), num_class]
+            # [len(self.num_layers), b, num_queries, num_class]

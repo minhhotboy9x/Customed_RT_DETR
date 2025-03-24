@@ -1,7 +1,8 @@
 - get_contrastive_denoising_training_group(targets,
                                              num_classes,
                                              num_queries,
-                                             class_embed,
+                                             class_embed: nn.Embedding denoising_class_embed
+                                                        from RTDETRTransformer,
                                              num_denoising=100,
                                              label_noise_ratio=0.5,
                                              box_noise_scale=1.0,):
@@ -20,9 +21,9 @@
     
     # pad gt to max_num of a batch
     bs = len(num_gts)
-    input_query_class:  [bs, max_gt_num]
-    input_query_bbox: [bs, max_gt_num, 4], 0 is no box
-    pad_gt_mask: [bs, max_gt_num], 1 is has gt, 0 is no
+    input_query_class:  [bs, max_gt_num] # init from torch
+    input_query_bbox: [bs, max_gt_num, 4], 0 is no box # init from torch
+    pad_gt_mask: [bs, max_gt_num], 1 is has gt, 0 is no # init from torch
 
     # each group has positive and negative queries.
     # 2 * num_group for pos and neg box noising

@@ -114,7 +114,7 @@ class CustomedDetSolver(DetSolver):
 if __name__ == '__main__':
     # download pretrained model: https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetr_r18vd_dec3_6x_coco_from_paddle.pth
     args = Namespace(
-                    config='configs/rtdetr/rtdetr_r18vd_6x_coco_customed.yml', 
+                    config='configs/rtdetr/rtdetr_r18vd_6x_coco.yml', 
                     # config='configs/rtdetr/rtdetr_r18vd_6x_coco.yml', 
                     resume=None, 
                     tuning='rtdetr_r18vd_dec3_6x_coco_from_paddle.pth', 
