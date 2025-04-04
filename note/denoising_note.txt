@@ -6,7 +6,7 @@
                                              num_denoising=100,
                                              label_noise_ratio=0.5,
                                              box_noise_scale=1.0,):
-    targets: gt box and label from dataloader
+    targets: list of gt box and label from dataloader
     num_classes: 80
     num_queries: 300
     num_denoising: 100

@@ -91,7 +91,7 @@ TransformerDecoder(nn.Module):
         # torch.Size([len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, 4])
         # torch.Size([len(self.num_layers), b, int(max_gt_num * 2 * num_group) + num_queries, num_classes])
 
-        ## gradient design in decoder:
+        ## explain gradient design in decoder:
             the feats from encoder: 
                 memory, memory_spatial_shapes, memory_level_start_index
                 gradient is attached to every decoder layer
