@@ -9,9 +9,26 @@ __include__: [
 val_dataloader:
   batch_size: 4
 
-postprocessor: CustomedPostProcessor2
+# postprocessor: CustomedPostProcessor2
 
-CustomedPostProcessor2:
-  num_top_queries: 300
+# CustomedPostProcessor2:
+#   num_top_queries: 300
+
+RTDETR: 
+  decoder: CustomedRTDETRTransformer
+
+CustomedRTDETRTransformer:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  num_levels: 3
+
+  num_queries: 300
+
+  num_decoder_layers: 6
+  num_denoising: 100
+  
+  eval_idx: -1
+  eval_spatial_size: [640, 640]
 
 output_dir: ./output/rtdetr_r50vd_6x_coco
