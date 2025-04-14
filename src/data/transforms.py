@@ -7,10 +7,11 @@ import torch.nn as nn
 
 import torchvision
 torchvision.disable_beta_transforms_warning()
-from torchvision import datapoints
+from torchvision import tv_tensors as datapoints
 
 import torchvision.transforms.v2 as T
 import torchvision.transforms.v2.functional as F
+from torchvision.transforms.v2._utils import _get_fill
 
 from PIL import Image 
 from typing import Any, Dict, List, Optional
@@ -26,9 +27,9 @@ RandomZoomOut = register(T.RandomZoomOut)
 # RandomIoUCrop = register(T.RandomIoUCrop)
 RandomHorizontalFlip = register(T.RandomHorizontalFlip)
 Resize = register(T.Resize)
-ToImageTensor = register(T.ToImageTensor)
-ConvertDtype = register(T.ConvertDtype)
-SanitizeBoundingBox = register(T.SanitizeBoundingBox)
+ToTensor = register(T.ToTensor)
+ConvertImageDtype = register(T.ConvertImageDtype)
+SanitizeBoundingBoxes = register(T.SanitizeBoundingBoxes)
 RandomCrop = register(T.RandomCrop)
 Normalize = register(T.Normalize)
 
@@ -73,10 +74,22 @@ class PadToSize(T.Pad):
         datapoints.Image,
         datapoints.Video,
         datapoints.Mask,
-        datapoints.BoundingBox,
+        datapoints.BoundingBoxes,
     )
+    
+    def get_spatial_size(self, inp):
+        if isinstance(inp, torch.Tensor):
+            return list(inp.shape[-2:])
+        elif isinstance(inp, Image.Image):
+            w, h = inp.size
+            return [h, w]
+        elif hasattr(inp, 'spatial_size'):
+            return list(inp.spatial_size)
+        else:
+            raise TypeError(f"Unsupported type: {type(inp)}")
+            
     def _get_params(self, flat_inputs: List[Any]) -> Dict[str, Any]:
-        sz = F.get_spatial_size(flat_inputs[0])
+        sz = self.get_spatial_size(flat_inputs[0])
         h, w = self.spatial_size[0] - sz[0], self.spatial_size[1] - sz[1]
         self.padding = [0, 0, w, h]
         return dict(padding=self.padding)
@@ -89,7 +102,7 @@ class PadToSize(T.Pad):
         super().__init__(0, fill, padding_mode)
 
     def _transform(self, inpt: Any, params: Dict[str, Any]) -> Any:        
-        fill = self._fill[type(inpt)]
+        fill = _get_fill(self._fill, type(inpt))
         padding = params['padding']
         return F.pad(inpt, padding=padding, fill=fill, padding_mode=self.padding_mode)  # type: ignore[arg-type]
 
@@ -116,7 +129,7 @@ class RandomIoUCrop(T.RandomIoUCrop):
 @register
 class ConvertBox(T.Transform):
     _transformed_types = (
-        datapoints.BoundingBox,
+        datapoints.BoundingBoxes,
     )
     def __init__(self, out_fmt='', normalize=False) -> None:
         super().__init__()
@@ -130,13 +143,13 @@ class ConvertBox(T.Transform):
 
     def _transform(self, inpt: Any, params: Dict[str, Any]) -> Any:  
         if self.out_fmt:
-            spatial_size = inpt.spatial_size
+            canvas_size = inpt.canvas_size
             in_fmt = inpt.format.value.lower()
             inpt = torchvision.ops.box_convert(inpt, in_fmt=in_fmt, out_fmt=self.out_fmt)
-            inpt = datapoints.BoundingBox(inpt, format=self.data_fmt[self.out_fmt], spatial_size=spatial_size)
+            inpt = datapoints.BoundingBoxes(inpt, format=self.data_fmt[self.out_fmt], canvas_size=canvas_size)
         
         if self.normalize:
-            inpt = inpt / torch.tensor(inpt.spatial_size[::-1]).tile(2)[None]
+            inpt = inpt / torch.tensor(inpt.canvas_size[::-1]).tile(2)[None]
 
         return inpt
 
