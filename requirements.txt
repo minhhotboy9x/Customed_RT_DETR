@@ -1,13 +1,9 @@
+numpy==1.26.3
 matplotlib==3.8.3
-numpy==2.2.4
 onnx==1.15.0
 onnxsim==0.4.36
-packaging==24.2
-Pillow==11.2.1
 pycocotools==2.0.7
 PyYAML==6.0.1
-PyYAML==6.0.2
-scipy==1.15.2
 torch==2.5.1
 torchvision==0.20.1
 transformers==4.45.2
