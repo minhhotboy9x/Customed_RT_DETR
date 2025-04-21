@@ -26,7 +26,7 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
                            spatial_shapes,
                            denoising_class=None,
                            denoising_bbox_unact=None,
-                           leverage_class_anchors = [0.1],
+                           leverage_class_anchors = [0.5],
                            targets=None,):
         bs, _, _ = memory.shape
 
@@ -53,12 +53,13 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
         enc_outputs_class = self.enc_score_head(output_memory)
         enc_outputs_coord_unact = self.enc_bbox_head(output_memory) + anchors
 
-        enc_outputs_class_tmp = F.sigmoid(enc_outputs_class)
+        # enc_outputs_class_tmp = F.sigmoid(enc_outputs_class)
+        enc_outputs_class_tmp = enc_outputs_class
         for i in range(min(len(leverage_class_anchors), len(spatial_shapes))):
-            start_id_anchor = 0 if i == 0 else spatial_shapes[i-1][0] * spatial_shapes[i-1][1]
-            end_id_anchor = spatial_shapes[i][0] * spatial_shapes[i][1]
+            start_id_anchor = 0 if i == 0 else start_id_anchor + spatial_shapes[i-1][0] * spatial_shapes[i-1][1]
+            end_id_anchor = start_id_anchor + spatial_shapes[i][0] * spatial_shapes[i][1]
             enc_outputs_class_tmp[:, start_id_anchor:end_id_anchor, :] += \
-                leverage_class_anchors[i] * small_mask
+                enc_outputs_class_tmp[:, start_id_anchor:end_id_anchor, :] * leverage_class_anchors[i] * small_mask
 
         _, topk_ind = torch.topk(enc_outputs_class_tmp.max(-1).values, self.num_queries, dim=1)
         
