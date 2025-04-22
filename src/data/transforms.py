@@ -152,4 +152,9 @@ class ConvertBox(T.Transform):
             inpt = inpt / torch.tensor(inpt.canvas_size[::-1]).tile(2)[None]
 
         return inpt
-
+    
+    def transform(self, inpt: Any, params: Dict[str, Any]) -> Any:  
+        '''
+        For nightly build torchvision 0.22.0.dev20250421+cu128
+        '''
+        return self._transform(inpt, params)
