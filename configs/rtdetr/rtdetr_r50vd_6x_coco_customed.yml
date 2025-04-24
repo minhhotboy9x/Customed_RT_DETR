@@ -9,7 +9,7 @@ __include__: [
 val_dataloader:
   batch_size: 4
 
-# postprocessor: CustomedPostProcessor2
+postprocessor: CustomedPostProcessor3
 
 # CustomedPostProcessor2:
 #   num_top_queries: 300

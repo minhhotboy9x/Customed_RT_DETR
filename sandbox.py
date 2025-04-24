@@ -97,19 +97,6 @@ class CustomedDetSolver(DetSolver):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('Training time {}'.format(total_time_str))
     
-    def val_with_query(self, ):
-        self.eval()
-
-        base_ds = get_coco_api_from_dataset(self.val_dataloader.dataset)
-        
-        module = self.ema.module if self.ema else self.model
-        test_stats, coco_evaluator = evaluate_with_query(module, self.criterion, self.postprocessor,
-                self.val_dataloader, base_ds, self.device, self.output_dir)
-                
-        if self.output_dir:
-            dist.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
-        
-        return
     
 if __name__ == '__main__':
     # download pretrained model: https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetr_r18vd_dec3_6x_coco_from_paddle.pth
@@ -150,6 +137,7 @@ if __name__ == '__main__':
     # out = solver.model(input, targets)
 
     if args.test_only:
-        solver.val()
+        # solver.val()
+        solver.val_with_stat_selected_query()
     else:
         solver.fit()
