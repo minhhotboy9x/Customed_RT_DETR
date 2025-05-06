@@ -11,7 +11,8 @@ from src.misc import dist
 from src.data import get_coco_api_from_dataset
 
 from .solver import BaseSolver
-from .det_engine import train_one_epoch, evaluate, evaluate_with_stat_repeated_query, evaluate_with_stat_overlapped_query
+from .det_engine import train_one_epoch, evaluate, \
+    evaluate_with_stat_repeated_query, evaluate_with_stat_overlapped_query, evaluate_with_stat_objects
 
 
 class DetSolver(BaseSolver):
@@ -124,6 +125,20 @@ class DetSolver(BaseSolver):
         
         module = self.ema.module if self.ema else self.model
         test_stats, coco_evaluator = evaluate_with_stat_overlapped_query(module, self.criterion, self.postprocessor,
+                self.val_dataloader, base_ds, self.device, self.output_dir)
+                
+        if self.output_dir:
+            dist.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+        
+        return
+    
+    def val_with_stat_objects(self, ):
+        self.eval()
+
+        base_ds = get_coco_api_from_dataset(self.val_dataloader.dataset)
+        
+        module = self.ema.module if self.ema else self.model
+        test_stats, coco_evaluator = evaluate_with_stat_objects(module, self.criterion, self.postprocessor,
                 self.val_dataloader, base_ds, self.device, self.output_dir)
                 
         if self.output_dir:

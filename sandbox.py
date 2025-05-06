@@ -138,6 +138,6 @@ if __name__ == '__main__':
 
     if args.test_only:
         # solver.val()
-        solver.val_with_stat_selected_query()
+        solver.val_with_stat_objects()
     else:
         solver.fit()

@@ -1,0 +1,6 @@
+Number of overlapped queries each levels:  tensor([514315.,    640., 501317.], device='cuda:0')
+Number of queries each levels:  tensor([841373,    669, 657958], device='cuda:0')
+Ratio of overlapped queries each levels:  tensor([0.6113, 0.9567, 0.7619], device='cuda:0')
+Ratio of ious max of overlapped queries each levels:  tensor([0.0154, 0.0036, 0.0306], device='cuda:0')
+Ratio of ious matched of overlapped queries each levels:  tensor([0.5699,    nan, 0.5842], device='cuda:0')
+Ratio of ious unmatched of overlapped queries each levels:  tensor([0.0093, 0.0034, 0.0226], device='cuda:0')

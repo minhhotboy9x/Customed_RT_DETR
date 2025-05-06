@@ -223,7 +223,8 @@ class CustomedPostProcessor3(nn.Module):
             result = dict(labels=lab, boxes=box, scores=sco)
             results.append(result)
         
-        return results, outputs['overlapped_queries'], outputs['queries_per_level'], outputs['sum_iou_per_level']
+        return results, outputs['overlapped_queries'], outputs['queries_per_level'], outputs['sum_iou_per_level'], \
+                outputs['matched_sum_count'], outputs['unmatched_sum_count']
         
 
     def deploy(self, ):

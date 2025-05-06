@@ -15,7 +15,7 @@ from .rtdetr_decoder import RTDETRTransformer
 
 from src.core import register
 
-__all__ = ['CustomedRTDETRTransformer']
+__all__ = ['CustomedRTDETRTransformer',]
 
 def batched_iou(anchor_boxes, gt_boxes, gt_masks):
     """
@@ -87,7 +87,7 @@ def get_level_pos(topk_ind, spatial_shapes, level_start_index):
     
     return levels, x, y
 
-def get_gt_boxes(targets):
+def get_gt_boxes(targets, get_size = False):
     """
     targets: list of dicts, mỗi dict chứa key 'boxes' với shape [num_boxes, 4]
 
@@ -98,6 +98,7 @@ def get_gt_boxes(targets):
     max_boxes = max(len(t['boxes']) for t in targets)
     padded_boxes = []
     box_masks = []
+    
 
     for t in targets:
         boxes = t['boxes']
@@ -166,6 +167,33 @@ def sum_max_iou_per_level(ious, levels, num_levels=3):
 
     return sum_iou_per_level  # [num_levels]
 
+def sum_max_ious_match_unmatch_per_level(ious, levels, num_levels=3, iou_threshold=0.5):
+    """
+    ious: Tensor[B, 300, max_num_gt]
+    levels: Tensor[B, 300]
+    """
+    max_ious, _ = ious.max(dim=2)  # [B, 300]: IoU max của mỗi query
+    matched_mask = max_ious >= iou_threshold  # [B, 300]
+    
+    matched_sum = torch.zeros(num_levels, device=ious.device)
+    unmatched_sum = torch.zeros(num_levels, device=ious.device)
+    matched_count = torch.zeros(num_levels, dtype=torch.int, device=ious.device)
+    unmatched_count = torch.zeros(num_levels, dtype=torch.int, device=ious.device)
+
+    for lvl in range(num_levels):
+        lvl_mask = (levels == lvl)  # [B, 300]
+        
+        matched = matched_mask & lvl_mask
+        unmatched = (~matched_mask) & lvl_mask
+
+        matched_sum[lvl] = max_ious[matched].sum()
+        unmatched_sum[lvl] = max_ious[unmatched].sum()
+
+        matched_count[lvl] = matched.sum()
+        unmatched_count[lvl] = unmatched.sum()
+
+    return matched_sum, unmatched_sum, matched_count, unmatched_count
+
 def overlap_statistic(topk_ind, spatial_shapes, level_start_index, targets):
     device = topk_ind.device
     level_start_index = torch.tensor(level_start_index, device=device)
@@ -179,8 +207,10 @@ def overlap_statistic(topk_ind, spatial_shapes, level_start_index, targets):
     # number of overlapped queries per level
     overlapped_queries, queries_per_level = count_overlaped_queries(ious, levels)  # [num_levels]
     sum_iou_per_level = sum_max_iou_per_level(ious, levels)  # [num_levels]
+    matched_sum, unmatched_sum, matched_count, unmatched_count = sum_max_ious_match_unmatch_per_level(ious, levels)  # [num_levels]
+    return overlapped_queries, queries_per_level, sum_iou_per_level, \
+        (matched_sum, matched_count), (unmatched_sum, unmatched_count)
 
-    return overlapped_queries, queries_per_level, sum_iou_per_level
 
 @register
 class CustomedRTDETRTransformer(RTDETRTransformer):
@@ -231,9 +261,14 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
         
         overlapped_queries = None
         queries_per_level = None
-        avg_max_ious = None
+        sum_iou_per_level = None
+        matched_sum = None
+        matched_count = None
+        unmatched_sum = None
+        unmatched_count = None
         if not self.training:
-            overlapped_queries, queries_per_level, sum_iou_per_level = overlap_statistic(topk_ind, spatial_shapes, level_start_index, targets)
+            overlapped_queries, queries_per_level, sum_iou_per_level, \
+            (matched_sum, matched_count), (unmatched_sum, unmatched_count) = overlap_statistic(topk_ind, spatial_shapes, level_start_index, targets)
 
         reference_points_unact = enc_outputs_coord_unact.gather(dim=1, \
             index=topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1]))
@@ -258,7 +293,8 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
             target = torch.concat([denoising_class, target], 1)
 
         return target, reference_points_unact.detach(), enc_topk_bboxes, enc_topk_logits, \
-            overlapped_queries, queries_per_level, sum_iou_per_level
+                overlapped_queries, queries_per_level, sum_iou_per_level, \
+                (matched_sum, matched_count), (unmatched_sum, unmatched_count)
 
 
     def forward(self, feats, targets=None):
@@ -279,7 +315,8 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
 
         target, init_ref_points_unact, enc_topk_bboxes, enc_topk_logits, \
-            overlapped_queries, queries_per_level, sum_iou_per_level = \
+                overlapped_queries, queries_per_level, sum_iou_per_level, \
+                (matched_sum, matched_count), (unmatched_sum, unmatched_count) = \
             self._get_decoder_input(memory, spatial_shapes, level_start_index,
                                     denoising_class, 
                                     denoising_bbox_unact,
@@ -314,6 +351,8 @@ class CustomedRTDETRTransformer(RTDETRTransformer):
             out['overlapped_queries'] = overlapped_queries
             out['queries_per_level'] = queries_per_level
             out['sum_iou_per_level'] = sum_iou_per_level
+            out['matched_sum_count'] = (matched_sum, matched_count)
+            out['unmatched_sum_count'] = (unmatched_sum, unmatched_count)
 
         return out
 

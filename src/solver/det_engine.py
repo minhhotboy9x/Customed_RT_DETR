@@ -14,7 +14,7 @@ from typing import Iterable
 import torch
 import torch.amp 
 
-from src.data import CocoEvaluator
+from src.data import CocoEvaluator, CustomedCocoEvaluator
 from src.misc import (MetricLogger, SmoothedValue, reduce_dict)
 
 
@@ -260,6 +260,11 @@ def evaluate_with_stat_overlapped_query(model: torch.nn.Module, criterion: torch
     total_queries_per_level = torch.zeros(3, dtype=torch.int64).to(device)
     total_sum_max_ious = torch.zeros(3, dtype=torch.float).to(device)
 
+    total_sum_matched_ious = torch.zeros(3, dtype=torch.float).to(device)
+    total_count_matched_ious = torch.zeros(3, dtype=torch.float).to(device)
+    total_sum_unmatched_ious = torch.zeros(3, dtype=torch.float).to(device)
+    total_count_unmatched_ious = torch.zeros(3, dtype=torch.float).to(device)
+
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -267,11 +272,16 @@ def evaluate_with_stat_overlapped_query(model: torch.nn.Module, criterion: torch
         outputs = model(samples, targets)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
-        results, num_overlaped_queries, num_queries_per_level, sum_iou_per_level = postprocessors(outputs, orig_target_sizes)
+        results, num_overlaped_queries, num_queries_per_level, sum_iou_per_level, \
+            matched_sum_count, unmatched_sum_count = postprocessors(outputs, orig_target_sizes)
 
         total_overlaped_queries += num_overlaped_queries
         total_queries_per_level += num_queries_per_level
         total_sum_max_ious += sum_iou_per_level
+        total_sum_matched_ious += matched_sum_count[0]
+        total_count_matched_ious += matched_sum_count[1]
+        total_sum_unmatched_ious += unmatched_sum_count[0]
+        total_count_unmatched_ious += unmatched_sum_count[1]
 
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
@@ -294,6 +304,8 @@ def evaluate_with_stat_overlapped_query(model: torch.nn.Module, criterion: torch
         print("Number of queries each levels: ", total_queries_per_level)
         print("Ratio of overlapped queries each levels: ", total_overlaped_queries/total_queries_per_level)
         print("Ratio of ious max of overlapped queries each levels: ", total_sum_max_ious/total_overlaped_queries)
+        print("Ratio of ious matched of overlapped queries each levels: ", total_sum_matched_ious/total_count_matched_ious)
+        print("Ratio of ious unmatched of overlapped queries each levels: ", total_sum_unmatched_ious/total_count_unmatched_ious)
 
     stats = {}
     # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
@@ -304,4 +316,58 @@ def evaluate_with_stat_overlapped_query(model: torch.nn.Module, criterion: torch
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
 
 
+    return stats, coco_evaluator
+
+
+
+@torch.no_grad()
+def evaluate_with_stat_objects(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors, data_loader, base_ds, device, output_dir):
+    model.eval()
+    criterion.eval()
+
+    metric_logger = MetricLogger(delimiter="  ")
+    # metric_logger.add_meter('class_error', SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    header = 'Test:'
+
+    # iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
+    iou_types = postprocessors.iou_types
+    coco_evaluator = CustomedCocoEvaluator(base_ds, iou_types)
+    # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
+
+    panoptic_evaluator = None
+
+    for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        samples = samples.to(device)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        outputs = model(samples)
+
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
+        results = postprocessors(outputs, orig_target_sizes)
+        
+        res = {target['image_id'].item(): output for target, output in zip(targets, results)}
+        if coco_evaluator is not None:
+            coco_evaluator.update(res)
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    if coco_evaluator is not None:
+        coco_evaluator.synchronize_between_processes()
+    if panoptic_evaluator is not None:
+        panoptic_evaluator.synchronize_between_processes()
+
+    # accumulate predictions from all images
+    if coco_evaluator is not None:
+        coco_evaluator.accumulate()
+        coco_evaluator.summarize()
+    
+    stats = {}
+    # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    if coco_evaluator is not None:
+        if 'bbox' in iou_types:
+            stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+        if 'segm' in iou_types:
+            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+            
     return stats, coco_evaluator

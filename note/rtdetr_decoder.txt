@@ -138,16 +138,16 @@ class TransformerDecoderLayer(nn.Module):
         ...
     
     def forward(self,
-                tgt,
-                reference_points,
-                memory,
-                memory_spatial_shapes,
-                memory_level_start_index,
-                attn_mask=None,
-                memory_mask=None,
-                query_pos_embed=None):
+                tgt, # [bs, num_queries, d_model]
+                reference_points, # [bs, num_queries, 1, 4]
+                memory, # [bs, 8400, d_model]
+                memory_spatial_shapes, # [[80, 80], [40, 40], [20, 20]]
+                memory_level_start_index, # [0, 6400, 8000]
+                attn_mask=None, # None
+                memory_mask=None, # None
+                query_pos_embed=None): # [bs, 300, d_model]
         # self attention
-        q = k = self.with_pos_embed(tgt, query_pos_embed)
+        q = k = self.with_pos_embed(tgt, query_pos_embed) # [bs, num_queries, d_model]
 
         # if attn_mask is not None:
         #     attn_mask = torch.where(
@@ -155,17 +155,17 @@ class TransformerDecoderLayer(nn.Module):
         #         torch.zeros_like(attn_mask),
         #         torch.full_like(attn_mask, float('-inf'), dtype=tgt.dtype))
 
-        tgt2, _ = self.self_attn(q, k, value=tgt, attn_mask=attn_mask)
-        tgt = tgt + self.dropout1(tgt2)
-        tgt = self.norm1(tgt)
+        tgt2, _ = self.self_attn(q, k, value=tgt, attn_mask=attn_mask) # [bs, 300, d_model]
+        tgt = tgt + self.dropout1(tgt2) # [bs, 300, d_model]
+        tgt = self.norm1(tgt) # [bs, 300, d_model]
 
         # cross attention
         tgt2 = self.cross_attn(\
-            self.with_pos_embed(tgt, query_pos_embed), 
-            reference_points, 
-            memory, 
-            memory_spatial_shapes, 
-            memory_mask)
+            self.with_pos_embed(tgt, query_pos_embed), # [bs, 300, d_model]
+            reference_points, # [bs, num_queries, 1, 4]
+            memory, # [bs, 8400, d_model]
+            memory_spatial_shapes, # [[80, 80], [40, 40], [20, 20]]
+            memory_mask) # None
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
 
@@ -175,3 +175,147 @@ class TransformerDecoderLayer(nn.Module):
         tgt = self.norm3(tgt)
 
         return tgt
+    
+
+class MSDeformableAttention(nn.Module):
+    def __init__(self, embed_dim=256, num_heads=8, num_levels=4, num_points=4,):
+        """
+        Multi-Scale Deformable Attention Module
+        """
+        super(MSDeformableAttention, self).__init__()
+        self.embed_dim = embed_dim #
+        self.num_heads = num_heads # default 8
+        self.num_levels = num_levels # default 3
+        self.num_points = num_points # default 4 
+        self.total_points = num_heads * num_levels * num_points # 96
+
+        self.head_dim = embed_dim // num_heads # default 32
+        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+
+        self.sampling_offsets = nn.Linear(embed_dim, self.total_points * 2,) # *2 for x, y
+        self.attention_weights = nn.Linear(embed_dim, self.total_points)
+        self.value_proj = nn.Linear(embed_dim, embed_dim)
+        self.output_proj = nn.Linear(embed_dim, embed_dim)
+
+        self.ms_deformable_attn_core = deformable_attention_core_func
+
+        self._reset_parameters()
+
+    def forward(self,
+                query,
+                reference_points,
+                value,
+                value_spatial_shapes,
+                value_mask=None):
+        """
+        Args:
+            query (Tensor): [bs, query_length, d_model]
+            reference_points (Tensor): [bs, query_length, n_levels, 2], range in [0, 1], top-left (0,0),
+                bottom-right (1, 1), including padding area
+            value (Tensor): [bs, value_length, d_model]
+            value_spatial_shapes (List): [n_levels, 2], [(H_0, W_0), (H_1, W_1), ..., (H_{L-1}, W_{L-1})]
+            value_level_start_index (List): [n_levels], [0, H_0*W_0, H_0*W_0+H_1*W_1, ...]
+            value_mask (Tensor): [bs, value_length], True for non-padding elements, False for padding elements
+
+        Returns:
+            output (Tensor): [bs, Length_{query}, d_model]
+        """
+        bs, Len_q = query.shape[:2] # [bs, 300]
+        Len_v = value.shape[1] # [8400]
+
+        value = self.value_proj(value)
+        if value_mask is not None:
+            value_mask = value_mask.astype(value.dtype).unsqueeze(-1)
+            value *= value_mask
+        value = value.reshape(bs, Len_v, self.num_heads, self.head_dim) # [bs, 8400, num_head, head_dim=32]
+
+        sampling_offsets = self.sampling_offsets(query).reshape(
+            bs, Len_q, self.num_heads, self.num_levels, self.num_points, 2)
+        attention_weights = self.attention_weights(query).reshape(
+            bs, Len_q, self.num_heads, self.num_levels * self.num_points)
+        attention_weights = F.softmax(attention_weights, dim=-1).reshape(
+            bs, Len_q, self.num_heads, self.num_levels, self.num_points)
+
+        value_spatial_shapes # [[80, 80], [40, 40], [20, 20]]
+        if reference_points.shape[-1] == 2:
+            offset_normalizer = torch.tensor(value_spatial_shapes)
+            offset_normalizer = offset_normalizer.flip([1]).reshape(
+                1, 1, 1, self.num_levels, 1, 2)
+            sampling_locations = reference_points.reshape(
+                bs, Len_q, 1, self.num_levels, 1, 2
+            ) + sampling_offsets / offset_normalizer
+        elif reference_points.shape[-1] == 4:
+            sampling_locations = (
+                reference_points[:, :, None, :, None, :2] + sampling_offsets /
+                self.num_points * reference_points[:, :, None, :, None, 2:] * 0.5)
+        else:
+            raise ValueError(
+                "Last dim of reference_points must be 2 or 4, but get {} instead.".
+                format(reference_points.shape[-1]))
+        
+        sampling_locations: # [bs, 300, num_heads, num_levels, num_points, 2]
+
+        output = self.ms_deformable_attn_core(value, value_spatial_shapes, sampling_locations, attention_weights)
+
+        output = self.output_proj(output)
+            # [bs, 300, d_model]
+        return output
+
+def deformable_attention_core_func(value, value_spatial_shapes, sampling_locations, attention_weights):
+    """
+    Args:
+        value (Tensor): [bs, value_length, n_head, c] [bs, 8400, 8, 32]
+        value_spatial_shapes (Tensor|List): [n_levels, 2] # [[80, 80], [40, 40], [20, 20]]
+        value_level_start_index (Tensor|List): [n_levels]
+        sampling_locations (Tensor): [bs, query_length, n_head, n_levels, n_points, 2]
+        attention_weights (Tensor): [bs, query_length, n_head, n_levels, n_points]
+
+    Returns:
+        output (Tensor): [bs, Length_{query}, C]
+    """
+    bs, _, n_head, c = value.shape
+    _, Len_q, _, n_levels, n_points, _ = sampling_locations.shape
+
+    split_shape = [h * w for h, w in value_spatial_shapes] # [6400, 1600, 400]
+    value_list = value.split(split_shape, dim=1)
+        # [bs, 6400, 8, 32]
+        # [bs, 1600, 8, 32]
+        # [bs, 400, 8, 32]
+
+    sampling_grids = 2 * sampling_locations - 1
+        # [bs, 300, 8, 3, 4, 2]
+    sampling_value_list = []
+    for level, (h, w) in enumerate(value_spatial_shapes):
+        # N_, H_*W_, M_, D_ -> N_, H_*W_, M_*D_ -> N_, M_*D_, H_*W_ -> N_*M_, D_, H_, W_
+        value_l_ = value_list[level].flatten(2).permute(
+            0, 2, 1).reshape(bs * n_head, c, h, w)
+            # [b*n_head, c, hi, wi]
+
+        # N_, Lq_, M_, P_, 2 -> N_, M_, Lq_, P_, 2 -> N_*M_, Lq_, P_, 2
+        sampling_grid_l_ = sampling_grids[:, :, :, level].permute(
+            0, 2, 1, 3, 4).flatten(0, 1)
+            # [b*n_head, 300, n_points, 2]
+
+        # N_*M_, D_, Lq_, P_
+        sampling_value_l_ = F.grid_sample(
+            value_l_, # [b*n_head, c, hi, wi]
+            sampling_grid_l_,  # [b*n_head, 300, n_points, 2]
+            mode='bilinear', # interpolation method to sample the input pixels
+            padding_mode='zeros', # use 0 for out-of-bound grid locations,
+            align_corners=False)
+            # [b*n_head, c, 300, n_points]
+
+        sampling_value_list.append(sampling_value_l_)
+
+
+    # (N_, Lq_, M_, L_, P_) -> (N_, M_, Lq_, L_, P_) -> (N_*M_, 1, Lq_, L_*P_)
+    attention_weights = attention_weights.permute(0, 2, 1, 3, 4).reshape(
+        bs * n_head, 1, Len_q, n_levels * n_points)
+        # [bs * n_head, 1, 300, n_levels * n_points]
+
+    output = (torch.stack(
+        sampling_value_list, dim=-2).flatten(-2) *
+              attention_weights).sum(-1).reshape(bs, n_head * c, Len_q)
+        # [bs, d_model, 300]
+
+    return output.permute(0, 2, 1) # [bs, 300, d_model]
