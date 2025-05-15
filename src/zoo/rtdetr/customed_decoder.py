@@ -386,7 +386,7 @@ class CustomedRTDETRTransformer2(RTDETRTransformer):
             for i in range(len(tmp_targets)):
                 boxes = tmp_targets[i]['boxes']
                 canvas_size = boxes.canvas_size
-                if not boxes.normalize:
+                if not getattr(boxes, 'normalize', False):
                     boxes.data = boxes.data / torch.tensor(canvas_size[::-1], device=boxes.device).tile(2)[None]
                     boxes.normalize = True
                 boxes = torchvision.transforms.v2.functional.convert_bounding_box_format(
