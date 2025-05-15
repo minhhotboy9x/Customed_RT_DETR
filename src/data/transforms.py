@@ -150,7 +150,9 @@ class ConvertBox(T.Transform):
         
         if self.normalize:
             inpt = inpt / torch.tensor(inpt.canvas_size[::-1]).tile(2)[None]
-
+            inpt.normalize = True
+        else:
+            inpt.normalize = False
         return inpt
     
     def transform(self, inpt: Any, params: Dict[str, Any]) -> Any:  

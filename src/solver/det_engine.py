@@ -335,16 +335,22 @@ def evaluate_with_stat_objects(model: torch.nn.Module, criterion: torch.nn.Modul
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
     panoptic_evaluator = None
+    total_diff_objects = torch.zeros(model.decoder.num_levels, 3, device=device) # [num_feat, num_obj_size]
+    total_num_objects = torch.zeros(model.decoder.num_levels, 3, device=device) # [num_feat, num_obj_size]
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        outputs = model(samples, targets)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
         results = postprocessors(outputs, orig_target_sizes)
         
+        if outputs.get('stat_diff_gt_center') is not None:
+            total_diff_objects += outputs['stat_diff_gt_center']['diff_each_level']
+            total_num_objects += outputs['stat_diff_gt_center']['num_diff_each_level']
+
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
@@ -369,5 +375,10 @@ def evaluate_with_stat_objects(model: torch.nn.Module, criterion: torch.nn.Modul
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
         if 'segm' in iou_types:
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-            
+
+    if outputs.get('stat_diff_gt_center') is not None:
+        print("Number of diff objects each levels: ", total_diff_objects)
+        print("Number of objects each levels: ", total_num_objects)
+        print("Ratio of diff objects each levels: ", total_diff_objects/total_num_objects)
+
     return stats, coco_evaluator

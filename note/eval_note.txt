@@ -16,29 +16,80 @@ CocoEvaluator
     from pycocotools.cocoeval import COCOeval
     from pycocotools.coco import COCO
 
-    self.coco_gt: COCO object 
-    self.iou_types: (bbox, )
-    self.coco_eval['bbox']: COCOeval object
+    def __init__(self, coco_gt, iou_types):
+        assert isinstance(iou_types, (list, tuple))
+        coco_gt = copy.deepcopy(coco_gt)
+        self.coco_gt = coco_gt # COCO object 
 
-    def convert_to_xywh(boxes):
-        convert xyxy to xywh
+        self.iou_types = iou_types # (bbox, )
+        self.coco_eval = {}
+        for iou_type in iou_types:
+            self.coco_eval[iou_type] = COCOeval(coco_gt, iouType=iou_type)
+                # self.coco_eval['bbox']: COCOeval object
+        self.img_ids = []
+        self.eval_imgs = {k: [] for k in iou_types} # {'bbox': []}
+
+    def prepare(self, predictions, iou_type):
+        if iou_type == "bbox":
+            return self.prepare_for_coco_detection(predictions)
+        elif iou_type == "segm":
+            return self.prepare_for_coco_segmentation(predictions)
+        elif iou_type == "keypoints":
+            return self.prepare_for_coco_keypoint(predictions)
+        else:
+            raise ValueError("Unknown iou type {}".format(iou_type))
 
     def update(self, predictions)
-        predictions: a list with len = batch, each element is dict(['labels', 'boxes', 'scores'])
+        # predictions: a list with len = batch, each element is dict(['labels', 'boxes', 'scores'])
+        # coco_dt = COCO.loadRes(self.coco_gt, results): COCO object
 
-        coco_dt = COCO.loadRes(self.coco_gt, results): COCO object
+        img_ids = list(np.unique(list(predictions.keys()))) # ids of image e.g.: [139, 285, 632, ...]
+        self.img_ids.extend(img_ids)
 
+        for iou_type in self.iou_types: #[bbox]
+            results = self.prepare(predictions, iou_type) 
+                # list of bbox from multiple image
+
+            # suppress pycocotools prints
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stdout(devnull):
+                    coco_dt = COCO.loadRes(self.coco_gt, results) if results else COCO() 
+                    # COCO object for predictions
+
+            coco_eval = self.coco_eval[iou_type] # COCO eval object
+
+            coco_eval.cocoDt = coco_dt # COCO object for predictions
+            coco_eval.params.imgIds = list(img_ids) # take the list of evaluate image
+            img_ids, eval_imgs = evaluate(coco_eval)
+
+            self.eval_imgs[iou_type].append(eval_imgs) # list of np array of eval info object
+    
+    
     def prepare_for_coco_detection(self, predictions)
-        format the prediction:
-            [
-                {
-                    "image_id": original_id,
-                    "category_id": labels[k],
-                    "bbox": box,
-                    "score": scores[k],
-                }
-                for k, box in enumerate(boxes)
-            ]
+        coco_results = []
+        for original_id, prediction in predictions.items():
+            # loop through each images
+            
+            if len(prediction) == 0:
+                continue
+
+            boxes = prediction["boxes"]
+            boxes = convert_to_xywh(boxes).tolist() # (x1, y1, x2, y2) to (xmin, ymin, w, h)
+            scores = prediction["scores"].tolist()
+            labels = prediction["labels"].tolist()
+
+            coco_results.extend(
+                [
+                    {
+                        "image_id": original_id,
+                        "category_id": labels[k],
+                        "bbox": box,
+                        "score": scores[k],
+                    }
+                    for k, box in enumerate(boxes)
+                ]
+            )
+        return coco_results # list of multiple bounding box from multiple images
 
     def evaluate(self):
         p = self.params
@@ -51,3 +102,56 @@ CocoEvaluator
             (imgId, catId): computeIoU(imgId, catId)
             for imgId in p.imgIds
             for catId in catIds}
+
+def convert_to_xywh(boxes):
+    convert xyxy to xmin ymin w h
+
+def evaluate(self):
+    '''
+    Run per image evaluation on given images and store results (a list of dict) in self.evalImgs
+    :return: None
+    '''
+    # tic = time.time()
+    # print('Running per image evaluation...')
+    p = self.params # cocoeval.Params
+    # add backward compatibility if useSegm is specified in params
+    if p.useSegm is not None:
+        p.iouType = 'segm' if p.useSegm == 1 else 'bbox'
+        print('useSegm (deprecated) is not None. Running {} evaluation'.format(p.iouType))
+    # print('Evaluate annotation type *{}*'.format(p.iouType))
+    p.imgIds = list(np.unique(p.imgIds)) # list of img ids
+    if p.useCats:
+        p.catIds = list(np.unique(p.catIds)) # list of category ids
+    p.maxDets = sorted(p.maxDets) # [1 10 100] M=3 thresholds on max detections per image
+    self.params = p # cocoeval.Params
+
+    self._prepare()
+    # loop through images, area range, max detection number
+    catIds = p.catIds if p.useCats else [-1] # list of category ids
+
+    if p.iouType == 'segm' or p.iouType == 'bbox':
+        computeIoU = self.computeIoU # COCOeval.computeIoU
+    elif p.iouType == 'keypoints':
+        computeIoU = self.computeOks
+    self.ious = {
+        (imgId, catId): computeIoU(imgId, catId)
+        for imgId in p.imgIds
+        for catId in catIds}
+        # dict of (imgId, catId), each pair 
+
+    evaluateImg = self.evaluateImg # COCOeval.evaluateImg
+    maxDet = p.maxDets[-1] # 100
+    evalImgs = [
+        evaluateImg(imgId, catId, areaRng, maxDet)
+        for catId in catIds
+        for areaRng in p.areaRng
+        for imgId in p.imgIds
+    ]
+    # this is NOT in the pycocotools code, but could be done outside
+    evalImgs = np.asarray(evalImgs).reshape(len(catIds), len(p.areaRng), len(p.imgIds)) # [len(cls), 4 area, 4 imgIds]
+    self._paramsEval = copy.deepcopy(self.params) 
+        #['areaRng', 'areaRngLbl', 'catIds', 'imgIds', 'iouThrs', 'iouType', 'maxDets', 
+            'recThrs', 'setDetParams', 'setKpParams', 'useCats', 'useSegm']
+    # toc = time.time()
+    # print('DONE (t={:0.2f}s).'.format(toc-tic))
+    return p.imgIds, evalImgs

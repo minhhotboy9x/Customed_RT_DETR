@@ -9,15 +9,15 @@ __include__: [
 val_dataloader:
   batch_size: 4
 
-# postprocessor: CustomedPostProcessor2
+postprocessor: CustomedPostProcessor4
 
-# CustomedPostProcessor2:
-#   num_top_queries: 300
+CustomedPostProcessor4:
+  num_top_queries: 300
 
 RTDETR: 
-  decoder: RTDETRTransformer
+  decoder: CustomedRTDETRTransformer2
 
-CustomedRTDETRTransformer:
+CustomedRTDETRTransformer2:
   feat_channels: [256, 256, 256]
   feat_strides: [8, 16, 32]
   hidden_dim: 256
