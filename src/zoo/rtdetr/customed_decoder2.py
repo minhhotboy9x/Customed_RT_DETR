@@ -20,7 +20,7 @@ from src.core import register
 
 __all__ = ['CustomedRTDETRTransformer3']
 
-def deformable_attention_core_func_v2(query, value, value_spatial_shapes, sampling_locations):
+def customed_deformable_attention_core_func(query, value, value_spatial_shapes, sampling_locations):
     """
     Args:
         query (Tensor): [bs, query_length, c]
