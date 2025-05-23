@@ -244,7 +244,7 @@ class MSDeformableAttention(nn.Module):
             sampling_locations = reference_points.reshape(
                 bs, Len_q, 1, self.num_levels, 1, 2
             ) + sampling_offsets / offset_normalizer
-        elif reference_points.shape[-1] == 4:
+        elif reference_points.shape[-1] == 4: # [bs, query_length, 1 (for broad), 4 (cxcywh)], 
             sampling_locations = (
                 reference_points[:, :, None, :, None, :2] + sampling_offsets /
                 self.num_points * reference_points[:, :, None, :, None, 2:] * 0.5)

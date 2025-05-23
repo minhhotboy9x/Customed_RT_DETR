@@ -108,7 +108,7 @@ if __name__ == '__main__':
                     resume=None, 
                     # tuning='rtdetr_r18vd_dec3_6x_coco_from_paddle.pth', 
                     tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
-                    test_only=False, 
+                    test_only=True, 
                     amp=True, 
                     seed=None)
     # dist.init_distributed()
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     # out = solver.model(input, targets)
 
     if args.test_only:
-        # solver.val()
-        solver.val_with_stat_objects()
+        solver.val()
+        # solver.val_with_stat_objects()
     else:
         solver.fit()

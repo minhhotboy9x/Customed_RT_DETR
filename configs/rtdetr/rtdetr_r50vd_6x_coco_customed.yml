@@ -15,9 +15,9 @@ CustomedPostProcessor4:
   num_top_queries: 300
 
 RTDETR: 
-  decoder: CustomedRTDETRTransformer2
+  decoder: CustomedRTDETRTransformer3
 
-CustomedRTDETRTransformer2:
+CustomedRTDETRTransformer3:
   feat_channels: [256, 256, 256]
   feat_strides: [8, 16, 32]
   hidden_dim: 256

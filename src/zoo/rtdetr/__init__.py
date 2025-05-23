@@ -14,3 +14,4 @@ from .matcher import *
 # customed
 from .customed_postprocessor import *
 from .customed_decoder import *
+from .customed_decoder2 import *
