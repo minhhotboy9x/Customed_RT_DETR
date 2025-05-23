@@ -86,7 +86,7 @@ def deformable_attention_core_func_v2(query, value, value_spatial_shapes, sampli
 class CustomedMSDeformableAttention(MSDeformableAttention):
     def __init__(self, embed_dim=256, num_heads=8, num_levels=4, num_points=4,):
         super().__init__(embed_dim, num_heads, num_levels, num_points)
-        
+        self.w_q = nn.Linear(embed_dim, embed_dim)
         self.ms_deformable_attn_core = deformable_attention_core_func_v2
 
     def forward(self,
@@ -140,7 +140,8 @@ class CustomedMSDeformableAttention(MSDeformableAttention):
                 "Last dim of reference_points must be 2 or 4, but get {} instead.".
                 format(reference_points.shape[-1]))
 
-        output = self.ms_deformable_attn_core(query, value, value_spatial_shapes, sampling_locations)
+        projected_query = self.w_q(query)
+        output = self.ms_deformable_attn_core(projected_query, value, value_spatial_shapes, sampling_locations)
 
         output = self.output_proj(output)
 

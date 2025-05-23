@@ -124,7 +124,7 @@ if __name__ == '__main__':
         use_amp=args.amp,
         tuning=args.tuning
     )
-    cfg.epoches = 300
+    cfg.epoches = 100
     # cfg.device = torch.device('cpu')
     # print(list(vars(cfg).keys()))
     solver = CustomedDetSolver(cfg)
