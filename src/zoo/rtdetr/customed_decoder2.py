@@ -87,7 +87,7 @@ class CustomedMSDeformableAttention(MSDeformableAttention):
     def __init__(self, embed_dim=256, num_heads=8, num_levels=4, num_points=4,):
         super().__init__(embed_dim, num_heads, num_levels, num_points)
         self.w_q = nn.Linear(embed_dim, embed_dim)
-        self.ms_deformable_attn_core = deformable_attention_core_func_v2
+        self.ms_deformable_attn_core = customed_deformable_attention_core_func
 
     def forward(self,
                 query,
