@@ -15,3 +15,4 @@ from .matcher import *
 from .customed_postprocessor import *
 from .customed_decoder import *
 from .customed_decoder2 import *
+from .customed_decoder3 import *

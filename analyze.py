@@ -1,6 +1,11 @@
 import torch
 import torch.nn.functional as F
 
+print(torch.__version__)  
+print(torch.nn.attention.flash_sdp_enabled())  
+print(torch.backends.cuda.mem_efficient_sdp_enabled()) 
+print(torch.backends.cuda.math_sdp_enabled())
+
 # Tạo feature map kích thước (N=1, C=1, H=2, W=2)
 feature_map = torch.tensor([[[[1.0, 2.0],
                               [3.0, 5.0]]]])  # shape (1, 1, 2, 2)
