@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import pathlib
+import time
 from typing import Iterable
 
 import torch
@@ -380,5 +381,84 @@ def evaluate_with_stat_objects(model: torch.nn.Module, criterion: torch.nn.Modul
         print("Number of diff objects each levels: ", total_diff_objects)
         print("Number of objects each levels: ", total_num_objects)
         print("Ratio of diff objects each levels: ", total_diff_objects/total_num_objects)
+
+    return stats, coco_evaluator
+
+
+
+@torch.no_grad()
+def evaluate_with_forwarded_targets(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors, data_loader, base_ds, device, output_dir):
+    model.eval()
+    criterion.eval()
+
+    metric_logger = MetricLogger(delimiter="  ")
+    # metric_logger.add_meter('class_error', SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    header = 'Test:'
+
+    # iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
+    iou_types = postprocessors.iou_types
+    coco_evaluator = CocoEvaluator(base_ds, iou_types)
+    # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
+
+    panoptic_evaluator = None
+
+    total_infer_post_time = 0.0
+    num_iters = 0
+
+    for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        samples = samples.to(device)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        # ---- Start timing just inference + postprocess ----
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+
+        start.record()
+        outputs = model(samples, targets)
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
+        results = postprocessors(outputs, orig_target_sizes)
+        end.record()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+
+        total_infer_post_time += start.elapsed_time(end) / 1000.0  # Convert ms to seconds
+        num_iters += 1
+        # ---- End timing ----
+
+        # Outside timing: COCO evaluator
+        res = {target['image_id'].item(): output for target, output in zip(targets, results)}
+        if coco_evaluator is not None:
+            coco_evaluator.update(res)
+
+    # Sau vòng lặp
+    print(f"\nTổng thời gian chỉ cho inference + postprocess: {total_infer_post_time:.4f} s")
+    print(f"Thời gian inference + postprocess trung bình mỗi batch: {total_infer_post_time / num_iters:.4f} s")
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    if coco_evaluator is not None:
+        coco_evaluator.synchronize_between_processes()
+    if panoptic_evaluator is not None:
+        panoptic_evaluator.synchronize_between_processes()
+
+    # accumulate predictions from all images
+    if coco_evaluator is not None:
+        coco_evaluator.accumulate()
+        coco_evaluator.summarize()
+
+    
+    stats = {}
+    # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    if coco_evaluator is not None:
+        if 'bbox' in iou_types:
+            stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+        if 'segm' in iou_types:
+            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+            
 
     return stats, coco_evaluator

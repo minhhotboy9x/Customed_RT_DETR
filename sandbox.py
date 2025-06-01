@@ -137,7 +137,8 @@ if __name__ == '__main__':
     # out = solver.model(input, targets)
 
     if args.test_only:
-        solver.val()
+        # solver.val()
         # solver.val_with_stat_objects()
+        solver.val_with_simple_forwarded_targets()
     else:
         solver.fit()

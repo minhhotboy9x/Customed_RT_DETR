@@ -7,7 +7,7 @@ __include__: [
 ]
 
 val_dataloader:
-  batch_size: 4
+  batch_size: 8
 
 # postprocessor: CustomedPostProcessor4
 
