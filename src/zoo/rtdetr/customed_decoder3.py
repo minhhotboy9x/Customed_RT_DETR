@@ -287,7 +287,7 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
             query_mask = query_mask | keep_mask  # Kết hợp với mặt nạ hiện tại [bs, nhead, num_queries]
 
         query_attn_mask = query_mask.unsqueeze(-1) | query_mask.unsqueeze(-2) # [bs, nhead, num_queries, num_queries]
-        query_attn_mask.reshape(-1, self.num_queries, self.num_queries)
+        query_attn_mask = query_attn_mask.reshape(-1, self.num_queries, self.num_queries)
             # [bs*nhead, num_queries, num_queries]
 
         _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, self.num_queries, dim=1)
