@@ -275,15 +275,17 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
         if targets is not None:
             min_keep_queries = 150
             alpha = 15
-            num_targets = torch.tensor([len(t['labels']) for t in targets], device=query_mask.device) #[bs]
+            num_targets = torch.as_tensor([len(t['labels']) for t in targets], device=query_mask.device) #[bs]
 
-            keep_queries = min_keep_queries + alpha * torch.sqrt(num_targets.float()) # [bs]
+            keep_queries = min_keep_queries + alpha * num_targets.sqrt() # [bs]
             keep_queries = keep_queries.clamp(max=self.num_queries).long()  # Giới hạn bởi self.num_queries
 
             # Tạo mặt nạ
-            row_idx = torch.arange(self.num_queries, device=query_mask.device).view(1, 1, -1) # [1, 1, num_queries]
-            keep_queries = keep_queries.view(-1, 1, 1) # [bs, 1, 1]
-            keep_mask = row_idx >= keep_queries  # broadcast để tạo mặt nạ [bs, 1, num_queries]
+            row_idx = torch.arange(self.num_queries, device=query_mask.device).unsqueeze(0).expand(bs, -1) # [bs, num_queries]
+            keep_queries_expanded = keep_queries.unsqueeze(1) # [bs, 1]
+            keep_mask = row_idx >= keep_queries_expanded  # [bs, num_queries]
+
+            keep_mask = keep_mask.unsqueeze(1)  # [bs, 1, num_queries]
             query_mask = query_mask | keep_mask  # Kết hợp với mặt nạ hiện tại [bs, nhead, num_queries]
 
         query_attn_mask = query_mask.unsqueeze(-1) | query_mask.unsqueeze(-2) # [bs, nhead, num_queries, num_queries]

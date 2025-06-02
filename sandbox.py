@@ -103,10 +103,10 @@ if __name__ == '__main__':
     args = Namespace(
                     # config='configs/rtdetr/rtdetr_r18vd_6x_coco_customed.yml', 
                     # config='configs/rtdetr/rtdetr_r18vd_6x_coco.yml', 
-                    config='configs/rtdetr/rtdetr_r50vd_6x_coco.yml', 
-                    # config='configs/rtdetr/rtdetr_r50vd_6x_coco_customed.yml', 
+                    # config='configs/rtdetr/rtdetr_r50vd_6x_coco.yml', 
+                    config='configs/rtdetr/rtdetr_r50vd_6x_coco_customed.yml', 
                     resume=None, 
-                    # tuning='rtdetr_r18vd_dec3_6x_coco_from_paddle.pth', 
+                    # tuning='', 
                     tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
                     test_only=True, 
                     amp=True, 
@@ -137,8 +137,8 @@ if __name__ == '__main__':
     # out = solver.model(input, targets)
 
     if args.test_only:
-        # solver.val()
+        solver.val()
         # solver.val_with_stat_objects()
-        solver.val_with_simple_forwarded_targets()
+        # solver.val_with_simple_forwarded_targets()
     else:
         solver.fit()

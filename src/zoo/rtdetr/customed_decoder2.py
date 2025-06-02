@@ -20,10 +20,11 @@ from src.core import register
 
 __all__ = ['CustomedRTDETRTransformer3']
 
-def customed_deformable_attention_core_func(query, value, value_spatial_shapes, sampling_locations):
+def customed_deformable_attention_core_func(query, key_projector, value, value_spatial_shapes, sampling_locations):
     """
     Args:
         query (Tensor): [bs, query_length, c]
+        key_projector (nn.Module): A module to project the query to the key dimension. [C, C]
         value (Tensor): [bs, value_length, n_head, c]
         value_spatial_shapes (Tensor|List): [n_levels, 2]
         value_level_start_index (Tensor|List): [n_levels]
@@ -67,83 +68,32 @@ def customed_deformable_attention_core_func(query, value, value_spatial_shapes, 
     multihead_query = query.view(bs, Len_q, n_head, c).permute(0, 2, 3, 1).reshape(bs * n_head, c, Len_q)
         # [bs* n_head, c, len_q]
     
-    multi_lvl_sampling_value = torch.stack(sampling_value_list, dim=-2) 
-        # [bs*n_head, c, Len_q, n_levels, n_points]
+    multi_lvl_sampling_value = torch.stack(sampling_value_list, dim=-2).flatten(-2)
+        # [bs*n_head, c, Len_q, n_levels*n_points]
+    
+    multi_lvl_sampling_key = multi_lvl_sampling_value.permute(0, 2, 3, 1)
+        # [bs*n_head, Len_q, n_levels*n_points, c]
+    multi_lvl_sampling_key = key_projector(multi_lvl_sampling_key).permute(0, 3, 1, 2)
+        # [bs*n_head, c, Len_q, n_levels*n_points]
 
-    attn_scores = (multihead_query[..., None, None] * 
-                   multi_lvl_sampling_value).sum(dim=1)  
-        # [bs*n_head, Len_q, n_levels, n_points]
+    attn_scores = (multihead_query[..., None] * 
+                   multi_lvl_sampling_key).sum(dim=1)  
+        # [bs*n_head, Len_q, n_levels*n_points]
 
-    attn_weights = torch.softmax(attn_scores, dim=-1).flatten(-2).unsqueeze(1) 
-        # [bs*n_head, 1, len_q, n_levels* n_points]
+    attn_weights = torch.softmax(attn_scores, dim=-1).unsqueeze(1) 
+        # [bs*n_head, 1, len_q, n_levels*n_points]
 
-    output = (attn_weights * multi_lvl_sampling_value.flatten(-2)
+    output = (attn_weights * multi_lvl_sampling_value
               ).sum(-1).reshape(bs, n_head * c, Len_q)
+        # [bs, n_head*c, Len_q]
 
     return output.permute(0, 2, 1)
 
 class CustomedMSDeformableAttention(MSDeformableAttention):
-    def forward(self,
-                query,
-                reference_points,
-                value,
-                value_spatial_shapes,
-                value_mask=None):
-        """
-        Args:
-            query (Tensor): [bs, query_length, C]
-            reference_points (Tensor): [bs, query_length, n_levels, 2], range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area
-            value (Tensor): [bs, value_length, C]
-            value_spatial_shapes (List): [n_levels, 2], [(H_0, W_0), (H_1, W_1), ..., (H_{L-1}, W_{L-1})]
-            value_level_start_index (List): [n_levels], [0, H_0*W_0, H_0*W_0+H_1*W_1, ...]
-            value_mask (Tensor): [bs, value_length], True for non-padding elements, False for padding elements
-
-        Returns:
-            output (Tensor): [bs, Length_{query}, C]
-        """
-        bs, Len_q = query.shape[:2]
-        Len_v = value.shape[1]
-
-        value = self.value_proj(value)
-        if value_mask is not None:
-            value_mask = value_mask.astype(value.dtype).unsqueeze(-1)
-            value *= value_mask
-        value = value.reshape(bs, Len_v, self.num_heads, self.head_dim)
-
-        sampling_offsets = self.sampling_offsets(query).reshape(
-            bs, Len_q, self.num_heads, self.num_levels, self.num_points, 2)
-        attention_weights = self.attention_weights(query).reshape(
-            bs, Len_q, self.num_heads, self.num_levels * self.num_points)
-        attention_weights = F.softmax(attention_weights, dim=-1).reshape(
-            bs, Len_q, self.num_heads, self.num_levels, self.num_points)
-
-        if reference_points.shape[-1] == 2:
-            offset_normalizer = torch.tensor(value_spatial_shapes)
-            offset_normalizer = offset_normalizer.flip([1]).reshape(
-                1, 1, 1, self.num_levels, 1, 2)
-            sampling_locations = reference_points.reshape(
-                bs, Len_q, 1, self.num_levels, 1, 2
-            ) + sampling_offsets / offset_normalizer
-        elif reference_points.shape[-1] == 4:
-            sampling_locations = (
-                reference_points[:, :, None, :, None, :2] + sampling_offsets /
-                self.num_points * reference_points[:, :, None, :, None, 2:] * 0.5)
-        else:
-            raise ValueError(
-                "Last dim of reference_points must be 2 or 4, but get {} instead.".
-                format(reference_points.shape[-1]))
-
-        output = self.ms_deformable_attn_core(value, value_spatial_shapes, sampling_locations, attention_weights)
-
-        output = self.output_proj(output)
-
-        return output, sampling_locations
-
-class CustomedMSDeformableAttention2(MSDeformableAttention):
     def __init__(self, embed_dim=256, num_heads=8, num_levels=4, num_points=4,):
         super().__init__(embed_dim, num_heads, num_levels, num_points)
-        self.w_q = nn.Linear(embed_dim, embed_dim)
+        self.query_proj = nn.Linear(embed_dim, embed_dim)
+        self.key_proj = nn.Linear(self.head_dim, self.head_dim)
         self.ms_deformable_attn_core = customed_deformable_attention_core_func
 
     def forward(self,
@@ -197,8 +147,8 @@ class CustomedMSDeformableAttention2(MSDeformableAttention):
                 "Last dim of reference_points must be 2 or 4, but get {} instead.".
                 format(reference_points.shape[-1]))
 
-        projected_query = self.w_q(query)
-        output = self.ms_deformable_attn_core(projected_query, value, value_spatial_shapes, sampling_locations)
+        projected_query = self.query_proj(query)
+        output = self.ms_deformable_attn_core(projected_query, self.key_proj, value, value_spatial_shapes, sampling_locations)
 
         output = self.output_proj(output)
 
