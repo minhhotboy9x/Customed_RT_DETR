@@ -344,7 +344,16 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
 
         if not self.training:
             attn_mask = query_attn_mask
-
+        else:
+            bs, n_head, num_queries = query_mask.shape
+            num_denoising = dn_meta['dn_num_split'][0]
+            query_mask = query_mask.reshape(bs * n_head, num_queries)  # [bs * n_head, num_queries]
+            attn_mask = attn_mask.unsqueeze(0).repeat(bs * n_head, 1, 1)  # [bs * n_head, tgt_size, tgt_size]
+            # (1) Bất kỳ ai (denoising + query) cũng không được nhìn thấy query bị pad
+            attn_mask[:, :, num_denoising:] |= query_mask.unsqueeze(1)  # [bs*n_head, tgt_size, num_queries]
+            # (2) Query bị pad không được attend tới bất kỳ ai (kể cả denoising)
+            attn_mask[:, num_denoising:, :] |= query_mask.unsqueeze(-1)  # [bs*n_head, num_queries, tgt_size]
+            
         # decoder
         out_bboxes, out_logits = self.decoder(
             target,

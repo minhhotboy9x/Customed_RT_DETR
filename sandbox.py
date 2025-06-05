@@ -108,7 +108,7 @@ if __name__ == '__main__':
                     resume=None, 
                     # tuning='', 
                     tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
-                    test_only=True, 
+                    test_only=False, 
                     amp=True, 
                     seed=None)
     # dist.init_distributed()
