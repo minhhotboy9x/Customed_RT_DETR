@@ -5,7 +5,7 @@ https://github.com/facebookresearch/detr/blob/main/models/detr.py
 by lyuwenyu
 """
 
-
+import time
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F 
@@ -110,7 +110,7 @@ class SetCriterion(nn.Module):
 
     def loss_labels_vfl(self, outputs, targets, indices, num_boxes, log=True):
         assert 'pred_boxes' in outputs
-        idx = self._get_src_permutation_idx(indices)
+        idx = self._get_src_permutation_idx(indices) # (bs index, query index)
 
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
@@ -122,7 +122,7 @@ class SetCriterion(nn.Module):
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
-        target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
+        target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1] # one-hot encoding at the last dim
 
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
         target_score_o[idx] = ious.to(target_score_o.dtype)
@@ -233,10 +233,12 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if 'aux' not in k}
-
+        
+        matching_time = 0
         # Retrieve the matching between the outputs of the last layer and the targets
+        start_time = time.time()
         indices = self.matcher(outputs_without_aux, targets)
-
+        matching_time = time.time() - start_time
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
@@ -291,7 +293,7 @@ class SetCriterion(nn.Module):
                     l_dict = {k + f'_dn_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
-        return losses
+        return losses, matching_time
 
     @staticmethod
     def get_cdn_matched_indices(dn_meta, targets):

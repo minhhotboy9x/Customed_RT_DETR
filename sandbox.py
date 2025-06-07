@@ -106,8 +106,8 @@ if __name__ == '__main__':
                     # config='configs/rtdetr/rtdetr_r50vd_6x_coco.yml', 
                     config='configs/rtdetr/rtdetr_r50vd_6x_coco_customed.yml', 
                     resume=None, 
-                    # tuning='', 
-                    tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
+                    tuning='', 
+                    # tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
                     test_only=False, 
                     amp=True, 
                     seed=None)
@@ -124,7 +124,7 @@ if __name__ == '__main__':
         use_amp=args.amp,
         tuning=args.tuning
     )
-    cfg.epoches = 100
+    cfg.epoches = 1
     # cfg.device = torch.device('cpu')
     # print(list(vars(cfg).keys()))
     solver = CustomedDetSolver(cfg)

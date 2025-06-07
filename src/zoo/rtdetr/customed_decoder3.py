@@ -162,19 +162,52 @@ class FlashMultiheadAttention(nn.MultiheadAttention):
 
             len_q = query.size(1)  # L
             len_k = key.size(1)    # S
+            dtype = query.dtype
+            device = query.device
 
             attn_bias = self.convert_attn_mask_to_bias(attn_mask, 
                                                        key_padding_mask,
                                                        is_causal,
                                                        len_q, 
                                                        len_k,
-                                                       self.num_heads,)
+                                                       self.num_heads,) # (N, H, L, S)
+
+            if attn_bias is not None:
+                attn_bias = attn_bias.to(query.dtype)
+
+            def pad_to_multiple_of_8(length):
+                return ((length + 7) // 8) * 8
+            
+            if self.training: # training mode need to pad to multiple of 8
+                padded_len_q = pad_to_multiple_of_8(len_q)  # e.g., 504 for 498
+                padded_len_k = pad_to_multiple_of_8(len_k)  # e.g., 504 for 498
+
+                if attn_bias is not None:
+                    padded_attn_bias = torch.full(
+                        (attn_bias.size(0), attn_bias.size(1), padded_len_q, padded_len_k),
+                        float('-inf'),
+                        dtype=dtype,
+                        device=device
+                    )
+                    padded_attn_bias[:, :, :len_q, :len_k] = attn_bias
+                else:
+                    padded_attn_bias = None
+
+                # print('before', query.shape, attn_bias.shape )
+                if len_q != padded_len_q or len_k != padded_len_k:
+                    query = F.pad(query, (0, 0, 0, 0, 0, padded_len_q-len_q), mode='constant', value=0)
+                    key = F.pad(key, (0, 0, 0, 0, 0, padded_len_k-len_k), mode='constant', value=0)
+                    value = F.pad(value, (0, 0, 0, 0, 0, padded_len_k-len_k), mode='constant', value=0)
+            else:
+                padded_attn_bias = attn_bias
+            
 
             tgt = xops.memory_efficient_attention(
                 query, key, value,
-                attn_bias=attn_bias,
+                attn_bias=padded_attn_bias,
                 p=self.dropout if self.training else 0.0,
             )
+            tgt = tgt[:, :len_q, :]  # (N, L, heads, head_dim)
             tgt = self._reshape_from_heads(tgt)  # (N, L, heads * head_dim)
             tgt = self.out_proj(tgt)  # (N, L, E)
             return tgt, None
@@ -288,11 +321,16 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
             keep_mask = keep_mask.unsqueeze(1)  # [bs, 1, num_queries]
             query_mask = query_mask | keep_mask  # Kết hợp với mặt nạ hiện tại [bs, nhead, num_queries]
 
-        query_attn_mask = query_mask.unsqueeze(-1) | query_mask.unsqueeze(-2) # [bs, nhead, num_queries, num_queries]
-        query_attn_mask = query_attn_mask.reshape(-1, self.num_queries, self.num_queries)
-            # [bs*nhead, num_queries, num_queries]
+            col_keep = ~(query_mask[:, 0, :].all(dim=0))  # [num_queries], True là nên giữ
+            last_idx = col_keep.nonzero().max().item() + 1  # cắt đến vị trí này
+            query_mask = query_mask[:, :, :last_idx]  # [bs, nhead, new_num_queries]
 
-        _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, self.num_queries, dim=1)
+        new_num_queries = query_mask.shape[-1]  # Số lượng query thực tế sau khi cắt
+        query_attn_mask = query_mask.unsqueeze(-1) | query_mask.unsqueeze(-2) # [bs, nhead, num_queries, num_queries]
+        query_attn_mask = query_attn_mask.reshape(-1, last_idx, last_idx)
+            # [bs*nhead, new_num_queries, new_num_queries]
+
+        _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, new_num_queries, dim=1)
         
         reference_points_unact = enc_outputs_coord_unact.gather(dim=1, \
             index=topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1]))
@@ -342,17 +380,19 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
             query_mask, query_attn_mask = \
             self._get_decoder_input(memory, spatial_shapes, denoising_class, denoising_bbox_unact, targets)
 
-        if not self.training:
+        if not self.training or not dn_meta:
             attn_mask = query_attn_mask
         else:
-            bs, n_head, num_queries = query_mask.shape
+            bs, n_head, num_new_queries = query_mask.shape
             num_denoising = dn_meta['dn_num_split'][0]
-            query_mask = query_mask.reshape(bs * n_head, num_queries)  # [bs * n_head, num_queries]
+            dn_meta['dn_num_split'][1] = num_new_queries
+            attn_mask = attn_mask[:num_denoising+num_new_queries, :num_denoising+num_new_queries]  # [num_denoising+num_new_queries, num_denoising+num_new_queries]
+            multihead_query_mask = query_mask.reshape(bs * n_head, num_new_queries)  # [bs * n_head, num_queries]
             attn_mask = attn_mask.unsqueeze(0).repeat(bs * n_head, 1, 1)  # [bs * n_head, tgt_size, tgt_size]
             # (1) Bất kỳ ai (denoising + query) cũng không được nhìn thấy query bị pad
-            attn_mask[:, :, num_denoising:] |= query_mask.unsqueeze(1)  # [bs*n_head, tgt_size, num_queries]
+            attn_mask[:, :, num_denoising:] |= multihead_query_mask.unsqueeze(1)  # [bs*n_head, tgt_size, num_queries]
             # (2) Query bị pad không được attend tới bất kỳ ai (kể cả denoising)
-            attn_mask[:, num_denoising:, :] |= query_mask.unsqueeze(-1)  # [bs*n_head, num_queries, tgt_size]
+            attn_mask[:, num_denoising:, :] |= multihead_query_mask.unsqueeze(-1)  # [bs*n_head, num_queries, tgt_size]
             
         # decoder
         out_bboxes, out_logits = self.decoder(
@@ -379,6 +419,7 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
             if self.training and dn_meta is not None:
                 out['dn_aux_outputs'] = self._set_aux_loss(dn_out_logits, dn_out_bboxes)
                 out['dn_meta'] = dn_meta
-            
+        
+        out['query_mask'] = query_mask[:, 0, :]  # [bs, num_queries]
 
         return out

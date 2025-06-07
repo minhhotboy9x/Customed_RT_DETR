@@ -33,6 +33,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     ema = kwargs.get('ema', None)
     scaler = kwargs.get('scaler', None)
 
+    total_matching_time = 0.0
+    total_backward_time = 0.0
+
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -42,11 +45,16 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                 outputs = model(samples, targets)
             
             with torch.autocast(device_type=str(device), enabled=False):
-                loss_dict = criterion(outputs, targets)
+                loss_dict, matching_time = criterion(outputs, targets)
 
             loss = sum(loss_dict.values())
+            start_time = time.time()
             scaler.scale(loss).backward()
-            
+            end_time = time.time()
+
+            total_matching_time += matching_time
+            total_backward_time += end_time - start_time
+
             if max_norm > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
@@ -61,8 +69,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             
             loss = sum(loss_dict.values())
             optimizer.zero_grad()
+            start_time = time.time()
             loss.backward()
-            
+            end_time = time.time()
+            backward_time += end_time - start_time
             if max_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
@@ -86,6 +96,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+    print(f"Total matching time: {total_matching_time:.4f} s")
+    print(f"Total backward time: {total_backward_time:.4f} s")
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
