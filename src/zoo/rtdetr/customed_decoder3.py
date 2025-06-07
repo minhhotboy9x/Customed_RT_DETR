@@ -327,7 +327,7 @@ class CustomedRTDETRTransformer4(RTDETRTransformer):
 
         new_num_queries = query_mask.shape[-1]  # Số lượng query thực tế sau khi cắt
         query_attn_mask = query_mask.unsqueeze(-1) | query_mask.unsqueeze(-2) # [bs, nhead, num_queries, num_queries]
-        query_attn_mask = query_attn_mask.reshape(-1, last_idx, last_idx)
+        query_attn_mask = query_attn_mask.reshape(-1, new_num_queries, new_num_queries)
             # [bs*nhead, new_num_queries, new_num_queries]
 
         _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, new_num_queries, dim=1)
