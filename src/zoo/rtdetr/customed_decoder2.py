@@ -396,7 +396,8 @@ class CustomedRTDETRTransformer3(RTDETRTransformer):
             if self.training and dn_meta is not None:
                 out['dn_aux_outputs'] = self._set_aux_loss(dn_out_logits, dn_out_bboxes)
                 out['dn_meta'] = dn_meta
-
+        
+        out['enc_outputs'] = self._set_aux_loss([enc_topk_logits], [enc_topk_bboxes])
         out['topk_ind'] = topk_ind
         out['deformable_points'] = deformable_points
 

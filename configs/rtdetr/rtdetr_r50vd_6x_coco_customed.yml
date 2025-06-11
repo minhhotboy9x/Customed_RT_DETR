@@ -15,9 +15,9 @@ val_dataloader:
 #   num_top_queries: 300
 
 RTDETR: 
-  decoder: CustomedRTDETRTransformer4
+  decoder: CustomedRTDETRTransformer3
 
-CustomedRTDETRTransformer4:
+CustomedRTDETRTransformer3:
   feat_channels: [256, 256, 256]
   feat_strides: [8, 16, 32]
   hidden_dim: 256
