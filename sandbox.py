@@ -103,12 +103,12 @@ if __name__ == '__main__':
     args = Namespace(
                     # config='configs/rtdetr/rtdetr_r18vd_6x_coco_customed.yml', 
                     # config='configs/rtdetr/rtdetr_r18vd_6x_coco.yml', 
-                    # config='configs/rtdetr/rtdetr_r50vd_6x_coco.yml', 
-                    config='configs/rtdetr/rtdetr_r50vd_6x_coco_customed.yml', 
+                    config='configs/rtdetr/rtdetr_r50vd_6x_coco.yml', 
+                    # config='configs/rtdetr/rtdetr_r50vd_6x_coco_customed.yml', 
                     resume=None, 
                     tuning='', 
                     # tuning='rtdetr_r50vd_6x_coco_from_paddle.pth', 
-                    test_only=False, 
+                    test_only=True, 
                     amp=True, 
                     seed=None)
     # dist.init_distributed()
