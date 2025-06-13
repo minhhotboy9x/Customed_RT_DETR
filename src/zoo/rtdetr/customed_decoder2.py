@@ -178,7 +178,7 @@ class CustomedTransformerDecoderLayer(TransformerDecoderLayer):
         # self attention
         q = k = self.with_pos_embed(tgt, query_pos_embed)
 
-        tgt2, _ = self.self_attn(q, k, value=tgt, attn_mask=attn_mask)
+        tgt2, attn_weights = self.self_attn(q, k, value=tgt, attn_mask=attn_mask)
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
 
@@ -197,7 +197,7 @@ class CustomedTransformerDecoderLayer(TransformerDecoderLayer):
         tgt = tgt + self.dropout4(tgt2)
         tgt = self.norm3(tgt)
 
-        return tgt, sampling_locations
+        return tgt, sampling_locations, attn_weights
     
 class CustomedTransformerDecoder(TransformerDecoder):
     def forward(self,
@@ -222,7 +222,7 @@ class CustomedTransformerDecoder(TransformerDecoder):
             ref_points_input = ref_points_detach.unsqueeze(2) # [b, int(max_gt_num * 2 * num_group) + num_queries, 1, 4]
             query_pos_embed = query_pos_head(ref_points_detach)
 
-            output, sampling_locations = layer(output, ref_points_input, memory,
+            output, sampling_locations, attn_weights = layer(output, ref_points_input, memory,
                            memory_spatial_shapes, memory_level_start_index,
                            attn_mask, memory_mask, query_pos_embed)
 
@@ -232,6 +232,7 @@ class CustomedTransformerDecoder(TransformerDecoder):
             deformable_points.append({
                 'sampling_locations': sampling_locations,
                 'reference_points': ref_points_input,
+                'attn_weights': attn_weights,
             })
 
             if self.training:
